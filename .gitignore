@@ -1,0 +1,27 @@
+# Secrets — NEVER commit
+.env
+.env.local
+*.env
+!.env.example
+
+# Node / phone app
+node_modules/
+dist/
+build/
+.expo/
+*.log
+
+# Python (tooling/mocks)
+__pycache__/
+.venv/
+*.pyc
+
+# PlatformIO / Arduino (ESP32 firmware)
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
