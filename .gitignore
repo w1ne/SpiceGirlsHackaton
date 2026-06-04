@@ -20,6 +20,7 @@ __pycache__/
 .pio/
 .pioenvs/
 .piolibdeps/
+firmware/include/secrets.h
 
 # OS / editor
 .DS_Store

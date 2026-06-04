@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#b91c1c" />
+  <title>Spice Girls 🌶️</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>🌶️ Spice&nbsp;Girls</h1>
+    <button id="settingsBtn" class="icon" title="Settings">⚙️</button>
+  </header>
+
+  <main>
+    <section id="slots" class="slots"></section>
+
+    <section id="chat" class="chat"></section>
+
+    <div id="status" class="status"></div>
+  </main>
+
+  <footer>
+    <button id="talkBtn" class="talk">🎙️ Hold to talk</button>
+    <button id="resetBtn" class="ghost">New conversation</button>
+  </footer>
+
+  <!-- Settings drawer -->
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label>DeepInfra API key
+        <input id="diKey" type="text" inputmode="text" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false" />
+      </label>
+      <label>LLM model
+        <input id="llmModel" type="text" />
+      </label>
+      <label>Device ID
+        <input id="deviceId" type="text" />
+      </label>
+      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies (TTS)</label>
+      <div class="actions">
+        <button id="saveSettings" value="save">Save</button>
+        <button value="cancel" class="ghost">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Demo mode: dispense directly, bypassing voice -->
+  <dialog id="demo">
+    <form method="dialog">
+      <h2>Demo mode — direct dispense</h2>
+      <p class="muted">Bypasses mic/STT/LLM. Use if the room is loud or the network is slow.</p>
+      <div id="demoSlots" class="demo-slots"></div>
+      <div class="actions"><button value="close">Close</button></div>
+    </form>
+  </dialog>
+
+  <button id="demoBtn" class="fab" title="Demo mode">⚡</button>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
