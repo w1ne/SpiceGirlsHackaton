@@ -10,7 +10,7 @@
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <ESP32Servo.h>
+#include <Wire.h>
 #include <ArduinoJson.h>
 
 #define DEVICE_NAME   "SpiceGirls"
@@ -18,16 +18,29 @@
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 
-// --- servo wiring / geometry ---
-#define REVOLVER_PIN     4
-#define DISPENSE_PIN     5
-#define SLOT0_ANGLE      15
-#define SLOT_STEP_DEG    30   // 6 compartments * 30deg = 150deg span, fits 0..180
-#define DISP_REST_ANGLE  20
-#define DISP_PUSH_ANGLE  120
-#define DISP_DWELL_MS    300
+// --- I2C / PCA9685 servo driver (mirrors firmware-py/dispenser.py + pca9685.py) ---
+// The board carries a PCA9685 PWM driver on I2C (live at 0x40); the revolver and
+// shutter servos hang off its channels, NOT off raw GPIO. Same bus/pins/channels
+// /angles/timings as the proven MicroPython firmware.
+#define I2C_SDA          5
+#define I2C_SCL          6
+#define I2C_FREQ         400000
+#define PCA9685_ADDR     0x40
+#define PCA9685_MODE1    0x00
+#define PCA9685_PRESCALE 0xFE
+#define PCA9685_LED0_ON_L 0x06
 
-static Servo revolver, dispenser;
+#define REVOLVER_CH      8
+#define SHUTTER_CH       12
+#define SHUTTER_CLOSED   20
+#define SHUTTER_OPEN     120
+#define SHUTTER_DWELL_MS 300
+#define ROTATE_SETTLE_MS 600
+
+// compartment select angles, 1-indexed (1..6) — matches SLOT_ANGLES
+static const int SLOT_ANGLES[7] = { 0, 15, 45, 75, 105, 135, 165 };
+
+static int currentSlot = 0;   // tracks the revolver position to skip no-op rotations
 static NimBLECharacteristic *statusChar = nullptr;
 
 // command handed from the BLE callback (host task) to loop() for actuation
@@ -40,23 +53,62 @@ static void notifyStatus(const char *json) {
   Serial.printf("status: %s\n", json);
 }
 
+// --- PCA9685 minimal driver (ported register-for-register from pca9685.py) ---
+static void pcaWrite8(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(PCA9685_ADDR);
+  Wire.write(reg); Wire.write(val);
+  Wire.endTransmission();
+}
+static uint8_t pcaRead8(uint8_t reg) {
+  Wire.beginTransmission(PCA9685_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission();
+  Wire.requestFrom((uint8_t)PCA9685_ADDR, (uint8_t)1);
+  return Wire.available() ? Wire.read() : 0;
+}
+static void pcaSetFreq(int hz) {
+  int prescale = (int)lround(25000000.0 / (4096.0 * hz)) - 1;
+  uint8_t old = pcaRead8(PCA9685_MODE1);
+  pcaWrite8(PCA9685_MODE1, (old & 0x7F) | 0x10);  // SLEEP before writing prescale
+  pcaWrite8(PCA9685_PRESCALE, (uint8_t)prescale);
+  pcaWrite8(PCA9685_MODE1, old);
+  delay(5);
+  pcaWrite8(PCA9685_MODE1, old | 0xA1);           // RESTART | AI
+}
+static void pcaSetPwm(int ch, int on, int off) {
+  uint8_t base = PCA9685_LED0_ON_L + 4 * ch;
+  Wire.beginTransmission(PCA9685_ADDR);
+  Wire.write(base);
+  Wire.write(on & 0xFF); Wire.write((on >> 8) & 0x0F);
+  Wire.write(off & 0xFF); Wire.write((off >> 8) & 0x0F);
+  Wire.endTransmission();
+}
+static void pcaSetAngle(int ch, int deg) {
+  // 50 Hz -> 20 ms period (4096 ticks). Servo pulse 0.5..2.4 ms.
+  deg = constrain(deg, 0, 180);
+  double us = 500 + (deg / 180.0) * 1900;
+  int ticks = (int)(us / 20000.0 * 4096);
+  pcaSetPwm(ch, 0, ticks);
+}
+
 static void moveRevolver(int slot) {
-  int idx = slot >= 1 ? slot - 1 : slot;   // compartments are 1-indexed (1..6)
-  int angle = constrain(SLOT0_ANGLE + idx * SLOT_STEP_DEG, 0, 180);
+  if (slot == currentSlot) return;              // already there; skip the settle wait
+  int angle = SLOT_ANGLES[slot];
   Serial.printf("  revolver -> compartment %d (%d deg)\n", slot, angle);
-  revolver.write(angle); delay(600);
+  pcaSetAngle(REVOLVER_CH, angle); currentSlot = slot; delay(ROTATE_SETTLE_MS);
 }
 static void sweeps(int n) {
   for (int i = 0; i < n; i++) {
     Serial.printf("  sweep %d/%d\n", i + 1, n);
-    dispenser.write(DISP_PUSH_ANGLE); delay(DISP_DWELL_MS);
-    dispenser.write(DISP_REST_ANGLE); delay(DISP_DWELL_MS);
+    pcaSetAngle(SHUTTER_CH, SHUTTER_OPEN);   delay(SHUTTER_DWELL_MS);
+    pcaSetAngle(SHUTTER_CH, SHUTTER_CLOSED); delay(SHUTTER_DWELL_MS);
   }
 }
 static void doDispense(int slot, int units) {
   char buf[48]; snprintf(buf, sizeof(buf), "{\"status\":\"running\",\"slot\":%d}", slot);
   notifyStatus(buf);
-  moveRevolver(slot); sweeps(units);
+  if (slot < 1 || slot > 6) { notifyStatus("{\"status\":\"error\",\"msg\":\"unknown slot\"}"); return; }
+  moveRevolver(slot); sweeps(max(1, units));
   notifyStatus("{\"status\":\"done\"}");
 }
 
@@ -64,10 +116,14 @@ static void handle(const String &json) {
   Serial.printf("cmd: %s\n", json.c_str());
   JsonDocument doc;
   if (deserializeJson(doc, json)) { notifyStatus("{\"status\":\"error\",\"msg\":\"bad json\"}"); return; }
+  // Accept short keys (s/d, sent one step per write to fit the 20-byte BLE
+  // payload) and the long form (slot/dose_units) for compatibility — the chained
+  // `|` falls back variant->variant->literal (mirrors ble_server.py _command_loop).
   if (doc.is<JsonArray>()) {
-    for (JsonObject o : doc.as<JsonArray>()) doDispense(o["slot"] | 0, o["dose_units"] | 1);
+    for (JsonObject o : doc.as<JsonArray>())
+      doDispense(o["s"] | o["slot"] | 0, o["d"] | o["dose_units"] | 1);
   } else {
-    doDispense(doc["slot"] | 0, doc["dose_units"] | 1);
+    doDispense(doc["s"] | doc["slot"] | 0, doc["d"] | doc["dose_units"] | 1);
   }
 }
 
@@ -86,11 +142,14 @@ class SrvCB : public NimBLEServerCallbacks {
 
 void setup() {
   Serial.begin(115200); delay(300);
-  ESP32PWM::allocateTimer(0); ESP32PWM::allocateTimer(1);
-  revolver.setPeriodHertz(50); dispenser.setPeriodHertz(50);
-  revolver.attach(REVOLVER_PIN, 500, 2400);
-  dispenser.attach(DISPENSE_PIN, 500, 2400);
-  dispenser.write(DISP_REST_ANGLE); revolver.write(SLOT0_ANGLE);
+  // Bring up the PCA9685 on I2C(0) and home the servos (mirrors Dispenser.init):
+  // revolver to compartment 1, shutter closed, then let it settle.
+  Wire.begin(I2C_SDA, I2C_SCL, I2C_FREQ);
+  pcaWrite8(PCA9685_MODE1, 0x00); delay(5);
+  pcaSetFreq(50);
+  pcaSetAngle(REVOLVER_CH, SLOT_ANGLES[1]);
+  pcaSetAngle(SHUTTER_CH, SHUTTER_CLOSED);
+  currentSlot = 1; delay(ROTATE_SETTLE_MS);
   Serial.println("SpiceDispenser: servos homed");
 
   NimBLEDevice::init(DEVICE_NAME);
@@ -105,13 +164,16 @@ void setup() {
   statusChar->setValue("{\"status\":\"idle\"}");
   svc->start();
 
-  // Service UUID (128-bit) fills the main adv packet, so put the name in the
-  // scan response — that way the device shows as "SpiceGirls" in choosers.
+  // The phone discovers us by NAME (unfiltered scan, matched client-side), and
+  // Android resolves device.name from the PRIMARY advertisement far more reliably
+  // than from the scan response. So Flags + Complete Local Name go in the primary
+  // packet, and the 128-bit service UUID (only needed for GATT) in the scan
+  // response. Mirrors firmware-py/ble_adv.py build_payloads.
   NimBLEAdvertisementData advData;
   advData.setFlags(0x06);
-  advData.addServiceUUID(NimBLEUUID(SERVICE_UUID));
+  advData.setName(DEVICE_NAME);
   NimBLEAdvertisementData scanResp;
-  scanResp.setName(DEVICE_NAME);
+  scanResp.addServiceUUID(NimBLEUUID(SERVICE_UUID));
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanResp);
