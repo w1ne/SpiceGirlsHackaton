@@ -15,8 +15,8 @@ Servos: 🟠 signal · 🔴 +5V · ⚫ GND.
 
 | Connection | To |
 |---|---|
-| Revolver servo 🟠 signal | ESP32 **GPIO4** |
-| Dispense servo 🟠 signal | ESP32 **GPIO5** |
+| Revolver servo 🟠 signal | ESP32 **GPIO5** |
+| Dispense servo 🟠 signal | ESP32 **GPIO6** |
 | Both servos 🔴 +5V | **5V supply +** (external 5V recommended) |
 | Both servos ⚫ GND | **supply −** |
 | ESP32 **GND** pin | **supply −** (common ground — required) |
