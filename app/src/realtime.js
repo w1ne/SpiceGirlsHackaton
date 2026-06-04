@@ -7,21 +7,22 @@ import { CONFIG } from "../config.js";
 // idleMs: auto-stop the session after this long with no speech, so an always-on
 // mic isn't a battery/$$ leak (realtime is billed per minute). onIdle fires so
 // the caller can reset its UI. Default 90s; pass 0 to disable.
-export async function startRealtime({ instructions, tools, onToolCall, onUserText, onBotText, log, onIdle, idleMs = 90_000 }) {
+export async function startRealtime({ instructions, tools, voice, onToolCall, onUserText, onBotText, log, onIdle, idleMs = 90_000 }) {
   log("status", "minting realtime token…");
+  const voiceName = voice || CONFIG.REALTIME_VOICE;
   // 1) ephemeral token. PROXY mode mints it via the realtime-token edge function
   // (server holds the OpenAI key); dev fallback uses the baked key directly.
   const tokRes = CONFIG.PROXY
     ? await fetch(`${CONFIG.FN_BASE}/realtime-token`, {
         method: "POST",
         headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ voice: voiceName }),
       })
     : await fetch(`${CONFIG.OPENAI_BASE}/realtime/client_secrets`, {
         method: "POST",
         headers: { Authorization: `Bearer ${CONFIG.OPENAI_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          session: { type: "realtime", model: CONFIG.REALTIME_MODEL, audio: { output: { voice: CONFIG.REALTIME_VOICE } } },
+          session: { type: "realtime", model: CONFIG.REALTIME_MODEL, audio: { output: { voice: voiceName } } },
         }),
       });
   if (!tokRes.ok) throw new Error(`token ${tokRes.status}: ${(await tokRes.text()).slice(0, 140)}`);

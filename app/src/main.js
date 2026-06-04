@@ -5,6 +5,7 @@ import { TextToSpeech } from "@capacitor-community/text-to-speech";
 import { CONFIG } from "../config.js";
 import { TOOL_DEFS, runTool, realtimeTools } from "./tools.js";
 import { startRealtime } from "./realtime.js";
+import { PERSONAS, DEFAULT_PERSONA_ID, getPersona, personaSystemPrompt } from "./personas.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
@@ -24,7 +25,11 @@ const LS = {
   // scans, so skipping the scan is what makes reconnect reliable.
   get deviceId() { return localStorage.getItem("ble_device_id") || CONFIG.BLE_DEVICE_ID || ""; },
   set deviceId(v) { v ? localStorage.setItem("ble_device_id", v) : localStorage.removeItem("ble_device_id"); },
+  // Active character persona (personality + voice).
+  get persona() { return localStorage.getItem("persona") || DEFAULT_PERSONA_ID; },
+  set persona(v) { localStorage.setItem("persona", v); },
 };
+const activePersona = () => getPersona(LS.persona);
 
 const $ = (s) => document.querySelector(s);
 const slotsEl = $("#slots"), recipesEl = $("#recipes"), recipesWrap = $("#recipesWrap"),
@@ -260,7 +265,7 @@ function systemPrompt() {
   const mixes = st.mixes.length ? st.mixes.map((m) => m.name).join(", ") : "none yet";
   const prefLine = Object.entries(st.preferences || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || "none yet";
   const allergyLine = (st.allergens || []).length ? st.allergens.join(", ") : "none";
-  return `You are the brain of a smart spice dispenser, 6 compartments (1-6).
+  const base = `You are the brain of a smart spice dispenser, 6 compartments (1-6).
 Compartments: ${comp}. Saved mixes: ${mixes}. Preferences: ${prefLine}. Allergies (NEVER dispense): ${allergyLine}.
 A dose_unit is one pinch. Your words are read aloud, so be MINIMAL.
 
@@ -277,6 +282,8 @@ Only ask a question if you genuinely can't act (dish unknown, or no fitting spic
 question, never a checklist. Never re-confirm, never re-read the plan, never offer to save unless asked.
 Pick spices ONLY from what's loaded above. set_preference on a lasting taste, set_allergens on an allergy,
 set_compartments ONLY when told what goes where — never prompt for setup.`;
+  // Layer the active character's personality on top of the functional rules.
+  return personaSystemPrompt(activePersona(), base);
 }
 // Local-dev fallback target (proxy off): prefer OpenAI, else DeepInfra.
 function llmTarget() {
@@ -329,7 +336,40 @@ async function agentTurn(userText) {
   } catch (e) { status(e.message, "err"); bubble("⚠️ " + e.message); }
   finally { busy = false; }
 }
-async function speak(text) { if (LS.tts) { try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {} } }
+// Speak a reply in the active persona's voice. Prefer the persona's ElevenLabs
+// character voice (via the tts-eleven edge function, which holds the key); fall
+// back to the device's built-in TTS if that's unavailable or fails.
+async function speak(text) {
+  if (!LS.tts || !text) return;
+  const persona = activePersona();
+  if (CONFIG.PROXY && persona.eleven) {
+    try {
+      const r = await fetch(`${CONFIG.FN_BASE}/tts-eleven`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voiceId: persona.eleven }),
+      });
+      if (r.ok) { const { audio } = await r.json(); if (audio) { await playMp3Base64(audio); return; } }
+      else console.warn("tts-eleven:", r.status, (await r.text()).slice(0, 120));
+    } catch (e) { console.warn("tts-eleven failed, using device TTS:", e?.message || e); }
+  }
+  try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {}
+}
+// Decode a base64 MP3 and play it to completion via the Web Audio API. We avoid
+// Audio()+blob: URLs because the Android WebView can't load blob URLs into media
+// elements; decodeAudioData on the raw bytes works reliably.
+let _audioCtx = null;
+async function playMp3Base64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (_audioCtx.state === "suspended") { try { await _audioCtx.resume(); } catch {} }
+  const buf = await _audioCtx.decodeAudioData(bytes.buffer);
+  const src = _audioCtx.createBufferSource();
+  src.buffer = buf; src.connect(_audioCtx.destination); src.start(0);
+  await new Promise((resolve) => { src.onended = resolve; });
+}
 
 // ---------- continuous native speech ----------
 async function startConversation() {
@@ -375,6 +415,7 @@ async function startRealtimeVoice() {
   try {
     rt = await startRealtime({
       instructions: systemPrompt(),
+      voice: activePersona().rtVoice, // OpenAI preset for the active character
       tools: realtimeTools(),
       onToolCall: (name, args) => runTool(name, args, ctx),
       onUserText: (t) => bubble(t, "user"),
@@ -440,8 +481,38 @@ function openSettings() {
 $("#settingsBtn").onclick = openSettings;
 $("#saveSettings").onclick = () => { LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value; };
 
+// ---------- persona picker ----------
+function syncPersonaChip() {
+  const p = activePersona();
+  $("#personaBtn").textContent = p.emoji;
+  $("#personaBtn").title = `Character: ${p.name}`;
+}
+function selectPersona(id) {
+  LS.persona = id;
+  // Characters shine in Classic mode (their ElevenLabs voice); the plain
+  // Friendly default rides the faster realtime path.
+  LS.voiceMode = id === DEFAULT_PERSONA_ID ? "realtime" : "classic";
+  syncPersonaChip();
+  const p = activePersona();
+  bubble(`${p.emoji} ${p.name} is now your spice guide.`, "bot");
+  renderPersonaList();
+}
+function renderPersonaList() {
+  const cur = LS.persona;
+  $("#personaList").innerHTML = PERSONAS.map((p) =>
+    `<button type="button" class="persona${p.id === cur ? " on" : ""}" data-persona="${p.id}">
+       <span class="pemoji">${p.emoji}</span>
+       <span class="pmeta"><b>${p.name}</b><small>${p.blurb}</small></span>
+     </button>`).join("");
+  $("#personaList").querySelectorAll("button[data-persona]").forEach((el) =>
+    (el.onclick = () => selectPersona(el.dataset.persona)));
+}
+function openPersonas() { renderPersonaList(); $("#personas").showModal(); }
+$("#personaBtn").onclick = openPersonas;
+
 // ---------- boot ----------
 (async function init() {
+  syncPersonaChip();
   bubble("Setting up… connecting to your dispenser 🎙️");
   await loadDevice(); await loadRecipes(); await loadPreferences();
   if (!Object.keys(slots).length) { bubble("First time? Set up your compartments 🧂"); openInit(); }

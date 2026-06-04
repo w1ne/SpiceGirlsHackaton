@@ -58,6 +58,14 @@ dialog input[type=text], dialog select { width: 100%; margin-top: 6px; padding: 
 .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .actions button:not(.ghost) { background: var(--accent); color: #fff; width: auto; }
 .actions .ghost { width: auto; }
+.persona-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.persona { display: flex; align-items: center; gap: 12px; text-align: left; padding: 12px; border-radius: 12px;
+  border: 1px solid #3a2727; background: #1a1212; color: var(--text); width: 100%; }
+.persona.on { border-color: var(--accent); background: #2a1818; }
+.persona .pemoji { font-size: 26px; line-height: 1; }
+.persona .pmeta { display: flex; flex-direction: column; }
+.persona .pmeta b { font-size: 15px; color: var(--accent2); }
+.persona .pmeta small { color: var(--muted); font-size: 12px; }
 .motor-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
 .motor-grid button { background: var(--accent); color: #fff; display: flex; flex-direction: column; align-items: center; padding: 14px 6px; width: auto; }
 .motor-grid button small { color: #ffd9d9; font-size: 11px; }

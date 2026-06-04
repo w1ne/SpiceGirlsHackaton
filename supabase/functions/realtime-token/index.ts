@@ -16,11 +16,15 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
   if (!OPENAI_KEY) return json({ error: "OPENAI_KEY not configured on server" }, 500);
 
+  // The phone may request a per-persona voice; fall back to the configured default.
+  let voice = REALTIME_VOICE;
+  try { const b = await req.json(); if (b && typeof b.voice === "string" && b.voice) voice = b.voice; } catch { /* no body */ }
+
   const res = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      session: { type: "realtime", model: REALTIME_MODEL, audio: { output: { voice: REALTIME_VOICE } } },
+      session: { type: "realtime", model: REALTIME_MODEL, audio: { output: { voice } } },
     }),
   });
 

@@ -11,6 +11,7 @@
     <h1>🌶️ Spice&nbsp;Girls</h1>
     <div class="hdr-btns">
       <button id="bleBtn" class="chip-btn">🔗 Connect</button>
+      <button id="personaBtn" class="icon" title="Choose character">😊</button>
       <button id="motorsBtn" class="icon" title="Run motors">🎛️</button>
       <button id="initBtn" class="icon" title="Set up compartments">🧂</button>
       <button id="settingsBtn" class="icon">⚙️</button>
@@ -42,6 +43,16 @@
       <label class="row">Dose (sweeps):
         <input id="motorDose" type="number" min="1" max="9" value="1" style="width:64px" /></label>
       <div id="motorBtns" class="motor-grid"></div>
+      <div class="actions"><button value="close" class="ghost">Close</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="personas">
+    <form method="dialog">
+      <h2>🎭 Choose a character</h2>
+      <p class="muted">Each character has its own personality and voice. Character voices
+        (ElevenLabs) play in Classic voice mode.</p>
+      <div id="personaList" class="persona-list"></div>
       <div class="actions"><button value="close" class="ghost">Close</button></div>
     </form>
   </dialog>
