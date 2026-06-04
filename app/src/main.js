@@ -9,7 +9,7 @@ import { startRealtime } from "./realtime.js";
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
 let prefs = {}, allergens = [];
-let deviceId = null, listening = false, busy = false;
+let deviceId = null, listening = false, busy = false, connecting = false;
 
 const LS = {
   get diKey() { return localStorage.getItem("di_key") || CONFIG.DEEPINFRA_KEY || ""; },
@@ -159,13 +159,28 @@ function scanForDispenser(timeoutMs = 15000) {
 }
 
 async function connectBLE() {
+  if (deviceId || connecting) return;
+  connecting = true;
   try {
     status("initialising Bluetooth…");
     await BleClient.initialize({ androidNeverForLocation: true });
-    status("scanning for dispenser…");
-    const device = await scanForDispenser();
-    await BleClient.connect(device.deviceId, onDisconnect);
-    deviceId = device.deviceId;
+    // Retry scan+connect a few times — BLE scan/connect can transiently miss or
+    // time out, and a retry almost always succeeds without the user re-tapping.
+    let lastErr;
+    for (let attempt = 1; attempt <= 3 && !deviceId; attempt++) {
+      let device;
+      try {
+        status(attempt === 1 ? "scanning for dispenser…" : `connecting… (try ${attempt})`);
+        device = await scanForDispenser();
+        await BleClient.connect(device.deviceId, onDisconnect);
+        deviceId = device.deviceId;
+      } catch (e) {
+        lastErr = e;
+        try { if (device) await BleClient.disconnect(device.deviceId); } catch {}
+        await sleep(900);
+      }
+    }
+    if (!deviceId) throw lastErr || new Error("could not connect");
     // Status notifications are best-effort: the firmware's status characteristic
     // may lack a CCCD (subscribe → NotSupported). Dispensing works regardless, so
     // never let a notify failure tear down a good connection.
@@ -174,7 +189,11 @@ async function connectBLE() {
     } catch (e) { console.warn("status notifications unavailable:", e?.message || e); }
     bleBtn.textContent = "🟢 Dispenser"; bleBtn.classList.add("connected");
     status("dispenser connected", "ok"); bubble("Dispenser connected over Bluetooth ✅");
-  } catch (e) { status("BLE: " + (e.message || e), "err"); }
+  } catch (e) {
+    status("BLE: " + (e.message || e), "err");
+  } finally {
+    connecting = false;
+  }
 }
 function onDisconnect() {
   deviceId = null; bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected");
