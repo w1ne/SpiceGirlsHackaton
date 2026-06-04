@@ -6,7 +6,7 @@ compartments, asks clarifying questions, and dispenses the right spices.
 - **Phone app** (`app/`) — native Android (Capacitor). On-device speech-to-text +
   text-to-speech, clarifying-question LLM on DeepInfra. Talks to the dispenser
   over **BLE**; recipes/compartment config in **Supabase**.
-- **ESP32-S3/C3** (`firmware/`) — BLE GATT actuator, two servos (revolver select
+- **ESP32-S3** (`firmware/`) — BLE GATT actuator, two servos (revolver select
   + dispense sweep).
 
 ## Wiring
