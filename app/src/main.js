@@ -344,14 +344,17 @@ async function speak(text) {
   const persona = activePersona();
   if (CONFIG.PROXY && persona.eleven) {
     try {
+      status(`🔊 ${persona.name} voice…`);
       const r = await fetch(`${CONFIG.FN_BASE}/tts-eleven`, {
         method: "POST",
         headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ text, voiceId: persona.eleven }),
       });
-      if (r.ok) { const { audio } = await r.json(); if (audio) { await playMp3Base64(audio); return; } }
-      else console.warn("tts-eleven:", r.status, (await r.text()).slice(0, 120));
-    } catch (e) { console.warn("tts-eleven failed, using device TTS:", e?.message || e); }
+      if (r.ok) {
+        const { audio } = await r.json();
+        if (audio) { const st = await playMp3Base64(audio); status(`🔊 played (${st})`, "ok"); return; }
+      } else { const t = (await r.text()).slice(0, 120); status(`⚠️ voice ${r.status}: ${t}`, "err"); }
+    } catch (e) { status(`⚠️ voice err: ${e?.message || e}`, "err"); }
   }
   try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {}
 }
@@ -359,16 +362,27 @@ async function speak(text) {
 // Audio()+blob: URLs because the Android WebView can't load blob URLs into media
 // elements; decodeAudioData on the raw bytes works reliably.
 let _audioCtx = null;
+function audioCtx() {
+  _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+// Resume the AudioContext from inside a user gesture (a tap). Android blocks
+// audio until a gesture has unlocked it; calling this on "Start talking" means a
+// later speak() (which runs in an async callback, NOT a gesture) can play sound.
+function unlockAudio() {
+  try { const c = audioCtx(); if (c.state === "suspended") c.resume(); } catch {}
+}
 async function playMp3Base64(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-  if (_audioCtx.state === "suspended") { try { await _audioCtx.resume(); } catch {} }
-  const buf = await _audioCtx.decodeAudioData(bytes.buffer);
-  const src = _audioCtx.createBufferSource();
-  src.buffer = buf; src.connect(_audioCtx.destination); src.start(0);
+  const c = audioCtx();
+  if (c.state === "suspended") { try { await c.resume(); } catch {} }
+  const buf = await c.decodeAudioData(bytes.buffer);
+  const src = c.createBufferSource();
+  src.buffer = buf; src.connect(c.destination); src.start(0);
   await new Promise((resolve) => { src.onended = resolve; });
+  return `ctx=${c.state} ${buf.duration.toFixed(1)}s`;
 }
 
 // ---------- continuous native speech ----------
@@ -389,11 +403,25 @@ async function listenLoop() {
   while (listening) {
     try {
       if (!busy) status("listening — just talk", "");
-      const res = await SpeechRecognition.start({ language: "en-US", maxResults: 1, partialResults: true, popup: false });
+      // partialResults:false makes start() BLOCK until a final result, so the
+      // loop runs once per utterance instead of spinning (partialResults:true
+      // resolves immediately, which turned this into a tight restart loop that
+      // hammered the recognizer with "busy" errors and froze the app).
+      const res = await SpeechRecognition.start({ language: "en-US", maxResults: 1, partialResults: false, popup: false });
       interimEl.textContent = "";
       const text = res?.matches?.[0];
       if (text && listening) await agentTurn(text);
-    } catch (_) { /* no-match / timeout — keep looping */ }
+      // Brief pause so the recognizer fully releases before the next start —
+      // otherwise rapid restarts hit "RecognitionService busy".
+      await sleep(300);
+    } catch (_) {
+      // start() can fail INSTANTLY ("RecognitionService busy", "Client side
+      // error"). Without a backoff the while-loop would spin thousands of times
+      // a second hammering the recognizer and freezing the app. Back off, then
+      // retry — also make sure any half-open session is stopped first.
+      try { await SpeechRecognition.stop(); } catch {}
+      await sleep(600);
+    }
   }
 }
 async function stopConversation() {
@@ -436,6 +464,7 @@ function stopRealtimeVoice() {
 
 micBtn.onclick = () => {
   if (listening) return rt ? stopRealtimeVoice() : stopConversation();
+  unlockAudio(); // this tap is a user gesture — unlock audio so speak() can play later
   return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
 };
 
