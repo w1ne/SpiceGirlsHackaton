@@ -43,6 +43,17 @@ static const int SLOT_ANGLES[7] = { 0, 15, 45, 75, 105, 135, 165 };
 static int currentSlot = 0;   // tracks the revolver position to skip no-op rotations
 static NimBLECharacteristic *statusChar = nullptr;
 
+// --- onboard WS2812 status LED on GPIO21 (mirrors firmware-py/led.py) ---
+//   advertising -> blue, connected -> green, busy -> white, error -> red.
+// neopixelWrite is in the ESP32 core, so no extra dependency; best-effort.
+#define LED_PIN 21
+static inline void ledSet(uint8_t r, uint8_t g, uint8_t b) { neopixelWrite(LED_PIN, r, g, b); }
+static inline void ledOff()         { ledSet(0, 0, 0); }
+static inline void ledAdvertising() { ledSet(0, 0, 40); }    // blue
+static inline void ledConnected()   { ledSet(0, 40, 0); }    // green
+static inline void ledBusy()        { ledSet(60, 60, 60); }  // white
+static inline void ledError()       { ledSet(60, 0, 0); }    // red
+
 // command handed from the BLE callback (host task) to loop() for actuation
 static volatile bool hasCmd = false;
 static String cmdBuf;
@@ -104,27 +115,34 @@ static void sweeps(int n) {
     pcaSetAngle(SHUTTER_CH, SHUTTER_CLOSED); delay(SHUTTER_DWELL_MS);
   }
 }
-static void doDispense(int slot, int units) {
+// One command step: notify running, then actuate. Returns false on a bad slot
+// (mirrors dispenser.dispense() raising on an unknown slot). No per-step "done"
+// — the batch emits a single "done" at the end, like ble_server.py _command_loop.
+static bool stepCmd(int slot, int units) {
   char buf[48]; snprintf(buf, sizeof(buf), "{\"status\":\"running\",\"slot\":%d}", slot);
-  notifyStatus(buf);
-  if (slot < 1 || slot > 6) { notifyStatus("{\"status\":\"error\",\"msg\":\"unknown slot\"}"); return; }
+  notifyStatus(buf); ledBusy();
+  if (slot < 1 || slot > 6) { notifyStatus("{\"status\":\"error\",\"msg\":\"unknown slot\"}"); ledError(); return false; }
   moveRevolver(slot); sweeps(max(1, units));
-  notifyStatus("{\"status\":\"done\"}");
+  return true;
 }
 
 static void handle(const String &json) {
   Serial.printf("cmd: %s\n", json.c_str());
   JsonDocument doc;
-  if (deserializeJson(doc, json)) { notifyStatus("{\"status\":\"error\",\"msg\":\"bad json\"}"); return; }
+  if (deserializeJson(doc, json)) { notifyStatus("{\"status\":\"error\",\"msg\":\"bad json\"}"); ledError(); return; }
   // Accept short keys (s/d, sent one step per write to fit the 20-byte BLE
   // payload) and the long form (slot/dose_units) for compatibility — the chained
   // `|` falls back variant->variant->literal (mirrors ble_server.py _command_loop).
+  // A single object is treated as a one-element batch; a recipe array runs every
+  // step, then ONE "done" — stopping early if a step fails (the for/else in Python).
+  bool ok = true;
   if (doc.is<JsonArray>()) {
     for (JsonObject o : doc.as<JsonArray>())
-      doDispense(o["s"] | o["slot"] | 0, o["d"] | o["dose_units"] | 1);
+      if (!stepCmd(o["s"] | o["slot"] | 0, o["d"] | o["dose_units"] | 1)) { ok = false; break; }
   } else {
-    doDispense(doc["s"] | doc["slot"] | 0, doc["d"] | doc["dose_units"] | 1);
+    ok = stepCmd(doc["s"] | doc["slot"] | 0, doc["d"] | doc["dose_units"] | 1);
   }
+  if (ok) { notifyStatus("{\"status\":\"done\"}"); ledConnected(); }
 }
 
 class CmdCB : public NimBLECharacteristicCallbacks {
@@ -134,9 +152,9 @@ class CmdCB : public NimBLECharacteristicCallbacks {
   }
 };
 class SrvCB : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { Serial.println("BLE: connected"); }
+  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { Serial.println("BLE: connected"); ledConnected(); }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
-    Serial.println("BLE: disconnected, re-advertising"); NimBLEDevice::startAdvertising();
+    Serial.println("BLE: disconnected, re-advertising"); ledAdvertising(); NimBLEDevice::startAdvertising();
   }
 };
 
@@ -178,7 +196,9 @@ void setup() {
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanResp);
   adv->enableScanResponse(true);
+  adv->setMinInterval(400); adv->setMaxInterval(400);  // 400 * 0.625ms = 250ms (matches _ADV_INTERVAL_US)
   NimBLEDevice::startAdvertising();
+  ledAdvertising();  // blue: waiting for a phone
   Serial.printf("BLE: advertising as \"%s\"\n", DEVICE_NAME);
 }
 
