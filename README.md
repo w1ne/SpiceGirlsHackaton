@@ -39,16 +39,20 @@ Revolver: compartment 1→15°, +30° each, up to 6→165°. Shutter: closed 20�
 
 ## BLE interface (firmware ↔ app)
 
-- Service `a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70`, advertises as **"SpiceGirls"**
+- Service `a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70`, advertises the name **"SpiceGirls"**
+  in the primary advertisement (the app discovers by name); the service UUID rides in
+  the scan response. The app scans unfiltered and matches the name client-side.
 - **Command** char `…0001` (write): `{"slot":2,"dose_units":3}` or an array of those
 - **Status** char `…0002` (notify): `{"status":"running"|"done"|"error"}`
+- **Status LED** (onboard RGB, GPIO21): blue = advertising, green = connected,
+  white = running a command, red = error
 
 ## Setup
 
 ```bash
 # Flash the dispenser — MicroPython (ESP32-S3 + PCA9685) on USB
 cd firmware-py
-mpremote connect $PORT cp boot.py pca9685.py dispenser.py ble_server.py main.py :
+mpremote connect $PORT cp boot.py pca9685.py dispenser.py ble_adv.py led.py ble_server.py main.py :
 mpremote connect $PORT reset            # boots straight into the BLE server
 
 # Build + install the app

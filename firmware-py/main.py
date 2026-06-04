@@ -5,7 +5,7 @@
 #   esptool.py --chip esp32s3 --port /dev/tty.usbmodem* write_flash -z 0 \
 #       ESP32_GENERIC_S3-*.bin
 #   mpremote mip install aioble
-#   mpremote cp pca9685.py dispenser.py ble_server.py main.py :
+#   mpremote cp pca9685.py dispenser.py ble_adv.py led.py ble_server.py main.py :
 #   mpremote reset
 #
 # Wiring: PCA9685 SDA→GPIO8, SCL→GPIO9, VCC→3V3, GND→GND.
