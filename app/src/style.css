@@ -58,3 +58,7 @@ dialog input[type=text] { width: 100%; margin-top: 6px; padding: 10px; border-ra
 .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .actions button:not(.ghost) { background: var(--accent); color: #fff; width: auto; }
 .actions .ghost { width: auto; }
+.motor-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+.motor-grid button { background: var(--accent); color: #fff; display: flex; flex-direction: column; align-items: center; padding: 14px 6px; width: auto; }
+.motor-grid button small { color: #ffd9d9; font-size: 11px; }
+.motor-grid button:active { background: var(--accent2); color: #1a1212; }

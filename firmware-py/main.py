@@ -27,13 +27,7 @@ def main():
     print("I2C scan:", [hex(a) for a in i2c.scan()])
     dispenser = Dispenser(i2c)
     print("dispenser ready, BLE advertising as SpiceGirls")
-    # asyncio.run(ble_server.run(dispenser))
-
-    dispenser.dispense(1)
-    sleep(0.2)
-    dispenser.dispense(2)
-    sleep(0.2)
-    dispenser.dispense(3)
-    sleep(0.2)
+    # Run the BLE server so the phone app can connect and send commands.
+    asyncio.run(ble_server.run(dispenser))
 
 main()
