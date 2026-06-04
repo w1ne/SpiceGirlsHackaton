@@ -11,6 +11,7 @@
     <h1>🌶️ Spice&nbsp;Girls</h1>
     <div class="hdr-btns">
       <button id="bleBtn" class="chip-btn">🔗 Connect</button>
+      <button id="motorsBtn" class="icon" title="Run motors">🎛️</button>
       <button id="initBtn" class="icon" title="Set up compartments">🧂</button>
       <button id="settingsBtn" class="icon">⚙️</button>
     </div>
@@ -33,6 +34,18 @@
     <button id="micBtn" class="talk">🎙️ Start talking</button>
   </footer>
 
+  <dialog id="motors">
+    <form method="dialog">
+      <h2>🎛️ Run motors</h2>
+      <p class="muted">Fire a compartment directly — runs the revolver + dispense
+        servos. Works even before compartments are named.</p>
+      <label class="row">Dose (sweeps):
+        <input id="motorDose" type="number" min="1" max="9" value="1" style="width:64px" /></label>
+      <div id="motorBtns" class="motor-grid"></div>
+      <div class="actions"><button value="close" class="ghost">Close</button></div>
+    </form>
+  </dialog>
+
   <dialog id="init">
     <form method="dialog">
       <h2>🧂 Set up compartments</h2>
@@ -51,7 +64,13 @@
       <label>DeepInfra API key
         <input id="diKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="for voice (LLM)" />
       </label>
-      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies</label>
+      <label>Voice mode
+        <select id="voiceMode">
+          <option value="realtime">Realtime (OpenAI, natural)</option>
+          <option value="classic">Classic (turn-based)</option>
+        </select>
+      </label>
+      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies (classic only)</label>
       <div class="actions">
         <button id="saveSettings" value="save">Save</button>
         <button value="cancel" class="ghost">Cancel</button>

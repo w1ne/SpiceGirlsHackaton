@@ -1,5 +1,8 @@
 {
   "appId": "com.spicegirls.dispenser",
   "appName": "SpiceGirls",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
 }
