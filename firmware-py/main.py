@@ -29,7 +29,7 @@ def main():
     print("dispenser ready, BLE advertising as SpiceGirls")
     # asyncio.run(ble_server.run(dispenser))
 
-    dispenser.dispense(0)
+    dispenser.dispense(1)
     sleep(0.2)
     dispenser.dispense(2)
     sleep(0.2)

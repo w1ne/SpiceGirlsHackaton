@@ -50,3 +50,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Quick BLE test without the phone (Linux): `python tools/ble_test.py '{"slot":1,"dose_units":1}'`. 
+
+Move py-firmware files to the ESP:
+
+```shell
+cd ./firmware-py
+mpremote connect $PORT cp boot.py pca9685.py dispenser.py ble_server.py main.py :
+```
