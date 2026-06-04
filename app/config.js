@@ -14,6 +14,8 @@ export const CONFIG = {
   OPENAI_BASE: "https://api.openai.com/v1",
   OPENAI_MODEL: "gpt-4o-mini",
   OPENAI_KEY: import.meta.env.VITE_OPENAI_KEY || "",
+  REALTIME_MODEL: "gpt-realtime-mini",
+  REALTIME_VOICE: "marin",
   DEEPINFRA_BASE: "https://api.deepinfra.com/v1/openai",
   LLM_MODEL: "meta-llama/Meta-Llama-3.1-8B-Instruct",
   DEEPINFRA_KEY: import.meta.env.VITE_DEEPINFRA_KEY || "",

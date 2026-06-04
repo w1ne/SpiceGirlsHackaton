@@ -3,7 +3,8 @@ import { BleClient, textToDataView, dataViewToText } from "@capacitor-community/
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import { TextToSpeech } from "@capacitor-community/text-to-speech";
 import { CONFIG } from "../config.js";
-import { TOOL_DEFS, runTool } from "./tools.js";
+import { TOOL_DEFS, runTool, realtimeTools } from "./tools.js";
+import { startRealtime } from "./realtime.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
@@ -14,6 +15,9 @@ const LS = {
   set diKey(v) { localStorage.setItem("di_key", v); },
   get tts() { return localStorage.getItem("tts") !== "0"; },
   set tts(v) { localStorage.setItem("tts", v ? "1" : "0"); },
+  // "realtime" (OpenAI speech-to-speech) or "classic" (turn-based STT→LLM→TTS)
+  get voiceMode() { return localStorage.getItem("voice_mode") || (CONFIG.OPENAI_KEY ? "realtime" : "classic"); },
+  set voiceMode(v) { localStorage.setItem("voice_mode", v); },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -210,7 +214,35 @@ async function stopConversation() {
   micBtn.textContent = "🎙️ Start talking"; micBtn.classList.remove("listening");
   interimEl.textContent = ""; status("");
 }
-micBtn.onclick = () => (listening ? stopConversation() : startConversation());
+// ---------- realtime voice (OpenAI speech-to-speech) ----------
+let rt = null;
+async function startRealtimeVoice() {
+  if (!CONFIG.OPENAI_KEY) { status("OpenAI key needed for realtime", "err"); return; }
+  listening = true; micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
+  try {
+    rt = await startRealtime({
+      instructions: systemPrompt(),
+      tools: realtimeTools(),
+      onToolCall: (name, args) => runTool(name, args, ctx),
+      onUserText: (t) => bubble(t, "user"),
+      onBotText: (t) => bubble(t, "bot"),
+      log: (kind, text) => {
+        if (kind === "err") { status(text, "err"); bubble("⚠️ " + text); }
+        else if (kind === "tool") bubble("🔧 " + text);
+        else status(text, "ok");
+      },
+    });
+  } catch (e) { status("realtime: " + (e.message || e), "err"); bubble("⚠️ " + (e.message || e)); stopRealtimeVoice(); }
+}
+function stopRealtimeVoice() {
+  try { rt && rt.stop(); } catch {}
+  rt = null; listening = false; micBtn.textContent = "🎙️ Start talking"; micBtn.classList.remove("listening"); status("");
+}
+
+micBtn.onclick = () => {
+  if (listening) return rt ? stopRealtimeVoice() : stopConversation();
+  return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
+};
 
 // ---------- motor control buttons ----------
 function openMotors() {
@@ -247,9 +279,12 @@ $("#initBtn").onclick = openInit;
 $("#saveInit").onclick = saveInit;
 
 // ---------- settings ----------
-function openSettings() { $("#diKey").value = LS.diKey; $("#ttsOn").checked = LS.tts; $("#settings").showModal(); }
+function openSettings() {
+  $("#diKey").value = LS.diKey; $("#ttsOn").checked = LS.tts; $("#voiceMode").value = LS.voiceMode;
+  $("#settings").showModal();
+}
 $("#settingsBtn").onclick = openSettings;
-$("#saveSettings").onclick = () => { LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; };
+$("#saveSettings").onclick = () => { LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value; };
 
 // ---------- boot ----------
 (async function init() {

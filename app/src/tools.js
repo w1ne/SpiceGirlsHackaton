@@ -92,6 +92,16 @@ export const TOOL_DEFS = [
   },
 ];
 
+// Same tools, flattened for the OpenAI Realtime session schema.
+export function realtimeTools() {
+  return TOOL_DEFS.map((t) => ({
+    type: "function",
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
+}
+
 // Execute a tool call. ctx supplies the app's side-effecting actions:
 //   ctx.dispense(steps[{slot,dose_units}]) · ctx.saveCompartments(map{n:spice})
 //   ctx.saveMix(name, steps[{slot,dose_units}]) · ctx.getState()

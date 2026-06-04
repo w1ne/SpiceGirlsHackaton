@@ -64,7 +64,13 @@
       <label>DeepInfra API key
         <input id="diKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="for voice (LLM)" />
       </label>
-      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies</label>
+      <label>Voice mode
+        <select id="voiceMode">
+          <option value="realtime">Realtime (OpenAI, natural)</option>
+          <option value="classic">Classic (turn-based)</option>
+        </select>
+      </label>
+      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies (classic only)</label>
       <div class="actions">
         <button id="saveSettings" value="save">Save</button>
         <button value="cancel" class="ghost">Cancel</button>
