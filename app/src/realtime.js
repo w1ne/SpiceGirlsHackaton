@@ -67,7 +67,9 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
         // "unknown parameter: session.turn_detection").
         audio: {
           input: {
-            turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 600 },
+            // Higher threshold + longer silence so the mic only fires on clear,
+            // close speech aimed at the dispenser — not ambient kitchen chatter.
+            turn_detection: { type: "server_vad", threshold: 0.8, prefix_padding_ms: 300, silence_duration_ms: 900 },
             transcription: { model: "whisper-1" },
           },
         },
