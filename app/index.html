@@ -9,7 +9,11 @@
 <body>
   <header>
     <h1>🌶️ Spice&nbsp;Girls</h1>
-    <button id="bleBtn" class="chip-btn">🔗 Connect</button>
+    <div class="hdr-btns">
+      <button id="bleBtn" class="chip-btn">🔗 Connect</button>
+      <button id="initBtn" class="icon" title="Set up compartments">🧂</button>
+      <button id="settingsBtn" class="icon">⚙️</button>
+    </div>
   </header>
 
   <main>
@@ -21,12 +25,39 @@
     </section>
 
     <section id="chat" class="chat"></section>
+    <div id="interim" class="interim"></div>
     <div id="status" class="status"></div>
   </main>
 
   <footer>
-    <button id="demoInfo" class="ghost">Tap a spice or recipe to dispense</button>
+    <button id="micBtn" class="talk">🎙️ Start talking</button>
   </footer>
+
+  <dialog id="init">
+    <form method="dialog">
+      <h2>🧂 Set up compartments</h2>
+      <p class="muted">Load each compartment and tell the device what's inside. Leave blank if empty.</p>
+      <div id="initRows"></div>
+      <div class="actions">
+        <button id="saveInit" value="save">Save to device</button>
+        <button value="cancel" class="ghost">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label>DeepInfra API key
+        <input id="diKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="for voice (LLM)" />
+      </label>
+      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies</label>
+      <div class="actions">
+        <button id="saveSettings" value="save">Save</button>
+        <button value="cancel" class="ghost">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="./src/main.js"></script>
 </body>

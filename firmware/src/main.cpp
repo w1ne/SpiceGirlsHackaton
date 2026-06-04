@@ -21,8 +21,8 @@
 // --- servo wiring / geometry ---
 #define REVOLVER_PIN     4
 #define DISPENSE_PIN     5
-#define SLOT0_ANGLE      10
-#define SLOT_STEP_DEG    40
+#define SLOT0_ANGLE      15
+#define SLOT_STEP_DEG    30   // 6 compartments * 30deg = 150deg span, fits 0..180
 #define DISP_REST_ANGLE  20
 #define DISP_PUSH_ANGLE  120
 #define DISP_DWELL_MS    300
@@ -41,8 +41,9 @@ static void notifyStatus(const char *json) {
 }
 
 static void moveRevolver(int slot) {
-  int angle = constrain(SLOT0_ANGLE + slot * SLOT_STEP_DEG, 0, 180);
-  Serial.printf("  revolver -> slot %d (%d deg)\n", slot, angle);
+  int idx = slot >= 1 ? slot - 1 : slot;   // compartments are 1-indexed (1..6)
+  int angle = constrain(SLOT0_ANGLE + idx * SLOT_STEP_DEG, 0, 180);
+  Serial.printf("  revolver -> compartment %d (%d deg)\n", slot, angle);
   revolver.write(angle); delay(600);
 }
 static void sweeps(int n) {
@@ -104,9 +105,17 @@ void setup() {
   statusChar->setValue("{\"status\":\"idle\"}");
   svc->start();
 
+  // Service UUID (128-bit) fills the main adv packet, so put the name in the
+  // scan response — that way the device shows as "SpiceGirls" in choosers.
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x06);
+  advData.addServiceUUID(NimBLEUUID(SERVICE_UUID));
+  NimBLEAdvertisementData scanResp;
+  scanResp.setName(DEVICE_NAME);
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->addServiceUUID(SERVICE_UUID);
-  adv->setName(DEVICE_NAME);
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanResp);
+  adv->enableScanResponse(true);
   NimBLEDevice::startAdvertising();
   Serial.printf("BLE: advertising as \"%s\"\n", DEVICE_NAME);
 }

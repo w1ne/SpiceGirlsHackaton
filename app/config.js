@@ -9,4 +9,7 @@ export const CONFIG = {
   BLE_SERVICE: "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70",
   BLE_CMD: "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70",
   BLE_STATUS: "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70",
+  // DeepInfra (LLM brain for voice)
+  DEEPINFRA_BASE: "https://api.deepinfra.com/v1/openai",
+  LLM_MODEL: "meta-llama/Meta-Llama-3.1-8B-Instruct",
 };

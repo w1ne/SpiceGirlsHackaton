@@ -42,3 +42,19 @@ button { font: inherit; cursor: pointer; border: none; border-radius: 12px; padd
 .ghost { background: transparent; color: var(--muted); border: 1px solid #3a2727; width: 100%; }
 .chip-btn { background: var(--accent); color: #fff; padding: 8px 14px; font-size: 14px; }
 .chip-btn.connected { background: var(--ok); color: #06240f; }
+.hdr-btns { display: flex; gap: 8px; align-items: center; }
+.icon { background: none; font-size: 20px; padding: 6px 8px; }
+.interim { font-size: 15px; color: var(--accent2); min-height: 20px; font-style: italic; }
+.talk { width: 100%; background: var(--accent); color: #fff; font-size: 18px; font-weight: 600; padding: 18px; }
+.talk.listening { background: var(--ok); color: #06240f; animation: pulse 1.3s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+
+dialog { background: var(--panel); color: var(--text); border: 1px solid #3a2727; border-radius: 16px; width: min(92vw, 420px); padding: 20px; }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog h2 { margin-top: 0; }
+dialog label { display: block; margin: 12px 0; font-size: 14px; color: var(--muted); }
+dialog label.row { display: flex; align-items: center; gap: 8px; color: var(--text); }
+dialog input[type=text] { width: 100%; margin-top: 6px; padding: 10px; border-radius: 10px; border: 1px solid #3a2727; background: #1a1212; color: var(--text); }
+.actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.actions button:not(.ghost) { background: var(--accent); color: #fff; width: auto; }
+.actions .ghost { width: auto; }

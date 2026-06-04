@@ -12,6 +12,8 @@
     "@capacitor/android": "^6.1.2",
     "@capacitor/core": "^6.1.2",
     "@capacitor-community/bluetooth-le": "^6.0.1",
+    "@capacitor-community/speech-recognition": "6.0.0",
+    "@capacitor-community/text-to-speech": "6.1.0",
     "@supabase/supabase-js": "^2.45.0"
   },
   "devDependencies": {
