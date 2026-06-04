@@ -36,13 +36,18 @@ export async function startRealtime({ instructions, tools, onToolCall, onUserTex
   pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; const p = audioEl.play(); if (p) p.catch(() => {}); };
   pc.onconnectionstatechange = () => log("status", "webrtc: " + pc.connectionState);
 
-  const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // Explicit echo cancellation so the open mic doesn't pick up the bot's own
+  // voice over the speaker and make it interrupt/talk over itself.
+  const mic = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
   mic.getTracks().forEach((t) => pc.addTrack(t, mic));
 
   // 3) data channel for events + tool calls
   const dc = pc.createDataChannel("oai-events");
   const send = (o) => { try { dc.send(JSON.stringify(o)); } catch (e) { log("err", "dc send: " + e); } };
 
+  let pendingTool = false; // a tool ran this turn → ask for ONE follow-up at response.done
   // idle auto-stop: any speech/tool activity resets the timer; silence trips it.
   let idleTimer = null;
   const bumpIdle = () => {
@@ -85,10 +90,16 @@ export async function startRealtime({ instructions, tools, onToolCall, onUserTex
         log("tool", `${ev.name}(${ev.arguments || ""})`);
         bumpIdle();
         const result = await onToolCall(ev.name, args);
+        // Submit the tool result now, but DON'T request a new response yet — the
+        // response that emitted this call is still active. Defer to response.done
+        // so one (and only one) follow-up fires, even for multi-call turns.
         send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: ev.call_id, output: JSON.stringify(result) } });
-        send({ type: "response.create" });
+        pendingTool = true;
         break;
       }
+      case "response.done":
+        if (pendingTool) { pendingTool = false; send({ type: "response.create" }); }
+        break;
       case "error":
         log("err", "server: " + JSON.stringify(ev.error || ev)); break;
     }
