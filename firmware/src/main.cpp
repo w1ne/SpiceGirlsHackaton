@@ -41,12 +41,22 @@ static int httpPatch(const String &path, const String &body) {
   return code;
 }
 
-static void connectWifi() {
-  if (WiFi.status() == WL_CONNECTED) return;
-  Serial.printf("WiFi: connecting to %s\n", WIFI_SSID);
+// Non-blocking: tries to (re)connect with a bounded wait, never hangs setup().
+static bool wifiReady() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  static unsigned long lastTry = 0;
+  if (lastTry && millis() - lastTry < 3000) return false;  // back off between attempts
+  lastTry = millis();
+  Serial.printf("WiFi: connecting to %s ...\n", WIFI_SSID);
   WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) { delay(400); Serial.print("."); }
-  Serial.printf("\nWiFi: %s\n", WiFi.localIP().toString().c_str());
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(200);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("WiFi: connected, %s\n", WiFi.localIP().toString().c_str());
+    return true;
+  }
+  Serial.println("WiFi: not connected yet, will retry");
+  return false;
 }
 
 static void heartbeat() {
@@ -123,12 +133,12 @@ void setup() {
   revolver.attach(REVOLVER_PIN, 500, 2400);
   dispenser.attach(DISPENSE_PIN, 500, 2400);
   dispenser.write(DISP_REST_ANGLE); revolver.write(SLOT0_ANGLE);
-  connectWifi();
-  Serial.println("SpiceDispenser ready");
+  Serial.println("SpiceDispenser ready (servos homed); bringing up WiFi");
+  wifiReady();
 }
 
 void loop() {
-  connectWifi();
+  if (!wifiReady()) { delay(500); return; }  // keep retrying, don't poll offline
   if (millis() - lastHeartbeat > 10000) { heartbeat(); lastHeartbeat = millis(); }
   if (!pollOnce()) delay(1000);  // idle poll interval
 }

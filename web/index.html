@@ -17,14 +17,20 @@
   <main>
     <section id="slots" class="slots"></section>
 
+    <section id="recipesWrap" class="recipes-wrap" hidden>
+      <div class="recipes-head">🍲 Recipes <small class="muted">tap to make</small></div>
+      <div id="recipes" class="slots"></div>
+    </section>
+
     <section id="chat" class="chat"></section>
 
+    <div id="interim" class="interim"></div>
     <div id="status" class="status"></div>
   </main>
 
   <footer>
-    <button id="talkBtn" class="talk">🎙️ Hold to talk</button>
-    <button id="resetBtn" class="ghost">New conversation</button>
+    <button id="micBtn" class="talk">🎙️ Start conversation</button>
+    <button id="resetBtn" class="ghost">Reset</button>
   </footer>
 
   <!-- Settings drawer -->
