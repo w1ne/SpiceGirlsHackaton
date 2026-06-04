@@ -106,15 +106,64 @@ async function setAllergens(spices) {
 }
 
 // ---------- BLE ----------
+// Find the dispenser with a manual LE scan and match CLIENT-SIDE on the advertised
+// service UUID (and name) from the scan record. We deliberately avoid:
+//   • requestDevice({namePrefix}) — it matches BluetoothDevice.getName(), which
+//     Android often returns null for mid-scan (the name is in the scan record, not
+//     the device cache), so discovery is racy and usually fails on Pixel.
+//   • a hardware service-UUID ScanFilter — flaky for 128-bit UUIDs on some phones.
+// requestLEScan (unfiltered) hands us result.uuids / result.localName parsed from
+// the scan record, which is reliable.
+// Pull the advertised local name (AD types 0x08 shortened / 0x09 complete) out of
+// the raw scan-record bytes. The plugin's result.localName comes from
+// BluetoothDevice.getName(), which is null mid-scan; the raw advertisement always
+// carries our name in the primary packet, so this is the reliable source.
+function advLocalName(raw) {
+  try {
+    let bytes;
+    if (raw && raw.buffer) bytes = new Uint8Array(raw.buffer);            // DataView
+    else if (typeof raw === "string") bytes = Uint8Array.from(raw.match(/.{1,2}/g).map((h) => parseInt(h, 16)));
+    else return "";
+    for (let i = 0; i < bytes.length; ) {
+      const len = bytes[i];
+      if (!len) break;
+      const type = bytes[i + 1];
+      if (type === 0x09 || type === 0x08) return new TextDecoder().decode(bytes.slice(i + 2, i + 1 + len));
+      i += 1 + len;
+    }
+  } catch {}
+  return "";
+}
+
+function scanForDispenser(timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    let done = false, seen = 0;
+    const names = new Set();
+    const finish = async (fn, arg) => {
+      if (done) return; done = true;
+      try { await BleClient.stopLEScan(); } catch {}
+      fn(arg);
+    };
+    const want = CONFIG.BLE_SERVICE.toLowerCase();
+    const timer = setTimeout(() =>
+      finish(reject, new Error(`dispenser not found (saw ${seen} adverts; names: ${[...names].slice(0, 6).join(", ") || "none"})`)), timeoutMs);
+    BleClient.requestLEScan({ allowDuplicates: true }, (result) => {
+      seen++;
+      const name = advLocalName(result.rawAdvertisement) || result.localName || result.device?.name || "";
+      if (name) names.add(name);
+      const hasUuid = (result.uuids || []).some((u) => String(u).toLowerCase() === want);
+      const hasName = String(name).startsWith("SpiceGirls");
+      if (hasUuid || hasName) { clearTimeout(timer); finish(resolve, result.device); }
+    }).catch((e) => { clearTimeout(timer); if (!done) { done = true; reject(e); } });
+  });
+}
+
 async function connectBLE() {
   try {
     status("initialising Bluetooth…");
     await BleClient.initialize({ androidNeverForLocation: true });
-    // Discover by NAME, not by an offloaded service-UUID scan filter: Android's
-    // hardware filter fails to match our 128-bit service UUID on some phones
-    // (Pixel) so the device never appears. Scanning unfiltered + matching the
-    // name client-side is reliable; optionalServices keeps GATT access on connect.
-    const device = await BleClient.requestDevice({ namePrefix: "SpiceGirls", optionalServices: [CONFIG.BLE_SERVICE] });
+    status("scanning for dispenser…");
+    const device = await scanForDispenser();
     await BleClient.connect(device.deviceId, onDisconnect);
     deviceId = device.deviceId;
     // Status notifications are best-effort: the firmware's status characteristic
@@ -155,8 +204,16 @@ async function dispense(plan) {
     status("✓ done (simulated)", "ok");
     return;
   }
-  await BleClient.write(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_CMD,
-    textToDataView(JSON.stringify(steps.length === 1 ? steps[0] : steps)));
+  // Send each step as its own SHORT write. The BLE default ATT payload is 20
+  // bytes, so {"slot":1,"dose_units":1} (25B) gets truncated → "bad json". Short
+  // keys ({"s":1,"d":1} = 13B) fit, and one write per step keeps every message
+  // under 20B no matter how many spices are in the mix. Sequential awaits avoid
+  // overlapping writes corrupting each other.
+  for (const s of steps) {
+    await BleClient.write(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_CMD,
+      textToDataView(JSON.stringify({ s: s.slot, d: s.dose_units })));
+    await sleep(1200); // let the revolver+shutter finish one dose before the next
+  }
 }
 
 // ---------- agent (DeepInfra + tool calling) ----------

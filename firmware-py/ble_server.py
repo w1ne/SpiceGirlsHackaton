@@ -65,8 +65,10 @@ async def _command_loop(dispenser):
 
         cmds = doc if isinstance(doc, list) else [doc]
         for c in cmds:
-            slot = c.get("slot", 0)
-            units = c.get("dose_units", 1)
+            # Accept short keys (s/d, sent one step per write to fit the 20-byte
+            # BLE payload) and the long form (slot/dose_units) for compatibility.
+            slot = c.get("s", c.get("slot", 0))
+            units = c.get("d", c.get("dose_units", 1))
             _notify({"status": "running", "slot": slot})
             led.busy()  # white: a command is running the motors
             try:
