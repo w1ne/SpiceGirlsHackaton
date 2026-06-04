@@ -10,7 +10,7 @@ import { PERSONAS, DEFAULT_PERSONA_ID, getPersona, personaSystemPrompt } from ".
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
 let prefs = {}, allergens = [];
-let deviceId = null, listening = false, busy = false, connecting = false;
+let deviceId = null, listening = false, busy = false, connecting = false, notifyOk = false;
 
 const LS = {
   get diKey() { return localStorage.getItem("di_key") || ""; },
@@ -211,7 +211,8 @@ async function connectBLE() {
     // never let a notify failure tear down a good connection.
     try {
       await BleClient.startNotifications(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_STATUS, onStatus);
-    } catch (e) { console.warn("status notifications unavailable:", e?.message || e); }
+      notifyOk = true;
+    } catch (e) { notifyOk = false; console.warn("status notifications unavailable:", e?.message || e); }
     bleBtn.textContent = "🟢 Dispenser"; bleBtn.classList.add("connected");
     status("dispenser connected", "ok"); bubble("Dispenser connected over Bluetooth ✅");
   } catch (e) {
@@ -221,19 +222,48 @@ async function connectBLE() {
   }
 }
 function onDisconnect() {
-  deviceId = null; bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected");
+  deviceId = null; notifyOk = false; bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected");
   status("dispenser disconnected — reconnecting…", "err");
   // Self-heal: the ESP drops the link if it resets (e.g. re-powered, or USB
   // re-enumerated). Auto-reconnect so dispenses keep reaching the motors instead
   // of silently simulating. The fast path (connect by address) makes this quick.
   if (!listening) setTimeout(() => { if (!deviceId) connectBLE().catch(() => {}); }, 1500);
 }
+let statusWaiters = [];
 function onStatus(value) {
+  statusWaiters.splice(0).forEach((r) => r()); // a pending dispense heard the firmware reply
   let s; try { s = JSON.parse(dataViewToText(value)); } catch { return; }
   const spice = slots[s.slot] ?? (s.slot != null ? `compartment ${s.slot}` : "");
   if (s.status === "running") status(`dispensing ${spice}…`);
   else if (s.status === "done") status("✓ done", "ok");
   else if (s.status === "error") status("✗ " + (s.msg || "error"), "err");
+}
+// Resolve when the firmware sends ANY status notification (proof of life), else
+// reject after ms. Used to detect a dead link that GATT still reports "connected".
+function nextStatus(ms) {
+  return new Promise((resolve, reject) => {
+    statusWaiters.push(resolve);
+    setTimeout(() => {
+      const i = statusWaiters.indexOf(resolve);
+      if (i >= 0) { statusWaiters.splice(i, 1); reject(new Error("no reply")); }
+    }, ms);
+  });
+}
+// The app's deviceId can be STALE — Android may not fire onDisconnect when the
+// ESP resets, so we'd think we're connected while the firmware is advertising
+// (blue LED). Verify against the OS's real connection list; reconnect if stale.
+async function ensureLive() {
+  if (deviceId) {
+    try {
+      const connected = await BleClient.getConnectedDevices([CONFIG.BLE_SERVICE]);
+      if (connected.some((d) => d.deviceId === deviceId)) return true;
+      // OS says we are NOT actually connected — drop the stale belief.
+      deviceId = null; bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected"); notifyOk = false;
+    } catch { return true; } // can't check → assume fine, don't disrupt a good link
+  }
+  status("reconnecting to dispenser…");
+  await connectBLE().catch(() => {});
+  return !!deviceId;
 }
 bleBtn.onclick = () => (deviceId ? null : connectBLE());
 
@@ -245,6 +275,8 @@ async function dispense(plan) {
   const steps = (plan || []).filter((p) => p && p.slot != null && p.dose_units > 0)
     .map((p) => ({ slot: +p.slot, dose_units: +p.dose_units }));
   if (!steps.length) return;
+  // Verify we're REALLY connected (not a stale handle) before claiming to dispense.
+  await ensureLive();
   const sim = !deviceId;
   bubble(`Dispensing${sim ? " (simulated)" : ""}: ${steps.map((s) => `${slots[s.slot] || "compartment " + s.slot} ×${s.dose_units}`).join(", ")}`);
   if (sim) {
@@ -258,8 +290,18 @@ async function dispense(plan) {
   // under 20B no matter how many spices are in the mix. Sequential awaits avoid
   // overlapping writes corrupting each other.
   for (const s of steps) {
+    const reply = notifyOk ? nextStatus(4000) : null; // arm a proof-of-life wait before writing
     await BleClient.write(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_CMD,
       textToDataView(JSON.stringify({ s: s.slot, d: s.dose_units })));
+    if (reply) {
+      // The firmware ALWAYS notifies "running"/"done". Silence = the link is dead
+      // even though GATT still says connected (e.g. the ESP reset). Don't lie
+      // about success — mark disconnected and surface it.
+      try { await reply; } catch {
+        onDisconnect();
+        throw new Error("dispenser not responding — reconnecting, try again");
+      }
+    }
     await sleep(1200); // let the revolver+shutter finish one dose before the next
   }
 }

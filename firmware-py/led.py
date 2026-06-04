@@ -34,3 +34,4 @@ def advertising(): _set(0, 0, 40)    # blue
 def connected():   _set(0, 40, 0)    # green
 def busy():        _set(60, 60, 60)  # white
 def error():       _set(60, 0, 0)    # red
+def green_level(b): _set(0, b, 0)    # green at brightness b — used for the connected pulse

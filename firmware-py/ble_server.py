@@ -34,6 +34,28 @@ def _notify(payload):
     print("status:", s)
 
 
+_dispensing = False  # set while motors run, so the connected-pulse yields to white
+
+
+async def _pulse_connected():
+    # Slow green "breathing" the whole time a phone is connected — an at-a-glance
+    # confirmation of a live link. Pauses while dispensing (that shows white).
+    while True:
+        if _dispensing:
+            await asyncio.sleep_ms(120)
+            continue
+        for b in range(4, 46, 3):
+            if _dispensing:
+                break
+            led.green_level(b)
+            await asyncio.sleep_ms(45)
+        for b in range(46, 4, -3):
+            if _dispensing:
+                break
+            led.green_level(b)
+            await asyncio.sleep_ms(45)
+
+
 async def _advertise_forever():
     while True:
         try:
@@ -44,9 +66,12 @@ async def _advertise_forever():
                 resp_data=_RESP_DATA,
                 connectable=True,
             ) as conn:
-                led.connected()  # green: phone connected, ready
                 print("BLE: connected", conn.device)
-                await conn.disconnected()
+                pulse = asyncio.create_task(_pulse_connected())  # green breathing while connected
+                try:
+                    await conn.disconnected()
+                finally:
+                    pulse.cancel()
                 print("BLE: disconnected, re-advertising")
         except Exception as e:
             led.error()  # red: advertising failed
@@ -63,6 +88,8 @@ async def _command_loop(dispenser):
             _notify({"status": "error", "msg": "bad json"})
             continue
 
+        global _dispensing
+        _dispensing = True  # pause the green pulse while the motors run
         cmds = doc if isinstance(doc, list) else [doc]
         for c in cmds:
             # Accept short keys (s/d, sent one step per write to fit the 20-byte
@@ -76,10 +103,11 @@ async def _command_loop(dispenser):
             except Exception as e:
                 led.error()  # red: command failed
                 _notify({"status": "error", "msg": str(e)})
+                _dispensing = False
                 break
         else:
-            led.connected()  # back to green: done, still connected
             _notify({"status": "done"})
+        _dispensing = False  # resume the green pulse (still connected)
 
 
 async def run(dispenser):
