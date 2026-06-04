@@ -10,21 +10,13 @@ import { CONFIG } from "../config.js";
 export async function startRealtime({ instructions, tools, voice, onToolCall, onUserText, onBotText, log, onIdle, idleMs = 90_000 }) {
   log("status", "minting realtime token…");
   const voiceName = voice || CONFIG.REALTIME_VOICE;
-  // 1) ephemeral token. PROXY mode mints it via the realtime-token edge function
-  // (server holds the OpenAI key); dev fallback uses the baked key directly.
-  const tokRes = CONFIG.PROXY
-    ? await fetch(`${CONFIG.FN_BASE}/realtime-token`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ voice: voiceName }),
-      })
-    : await fetch(`${CONFIG.OPENAI_BASE}/realtime/client_secrets`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${CONFIG.OPENAI_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session: { type: "realtime", model: CONFIG.REALTIME_MODEL, audio: { output: { voice: voiceName } } },
-        }),
-      });
+  // 1) ephemeral token — always minted by the realtime-token edge function, which
+  // holds the OpenAI key server-side. No provider key ever ships in the app.
+  const tokRes = await fetch(`${CONFIG.FN_BASE}/realtime-token`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ voice: voiceName }),
+  });
   if (!tokRes.ok) throw new Error(`token ${tokRes.status}: ${(await tokRes.text()).slice(0, 140)}`);
   const EPH = (await tokRes.json()).value;
 

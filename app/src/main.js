@@ -13,12 +13,12 @@ let prefs = {}, allergens = [];
 let deviceId = null, listening = false, busy = false, connecting = false;
 
 const LS = {
-  get diKey() { return localStorage.getItem("di_key") || CONFIG.DEEPINFRA_KEY || ""; },
+  get diKey() { return localStorage.getItem("di_key") || ""; },
   set diKey(v) { localStorage.setItem("di_key", v); },
   get tts() { return localStorage.getItem("tts") !== "0"; },
   set tts(v) { localStorage.setItem("tts", v ? "1" : "0"); },
   // "realtime" (OpenAI speech-to-speech) or "classic" (turn-based STT→LLM→TTS)
-  get voiceMode() { return localStorage.getItem("voice_mode") || (CONFIG.OPENAI_KEY || CONFIG.PROXY ? "realtime" : "classic"); },
+  get voiceMode() { return localStorage.getItem("voice_mode") || "realtime"; },
   set voiceMode(v) { localStorage.setItem("voice_mode", v); },
   // Last dispenser we connected to (Android deviceId == MAC). Lets us reconnect
   // WITHOUT scanning — Android throttles an app to zero results after a few
@@ -300,14 +300,12 @@ on an allergy, set_compartments ONLY when told what goes where — never prompt 
   // Layer the active character's personality on top of the functional rules.
   return personaSystemPrompt(activePersona(), base);
 }
-// Local-dev fallback target (proxy off): prefer OpenAI, else DeepInfra.
+// Local-dev fallback target (proxy off): DeepInfra with a dev-entered key.
 function llmTarget() {
-  return CONFIG.OPENAI_KEY
-    ? { url: `${CONFIG.OPENAI_BASE}/chat/completions`, key: CONFIG.OPENAI_KEY, model: CONFIG.OPENAI_MODEL }
-    : { url: `${CONFIG.DEEPINFRA_BASE}/chat/completions`, key: LS.diKey, model: CONFIG.LLM_MODEL };
+  return { url: `${CONFIG.DEEPINFRA_BASE}/chat/completions`, key: LS.diKey, model: CONFIG.LLM_MODEL };
 }
 // In proxy mode the key lives server-side, so no client key is needed.
-function hasLLMKey() { return CONFIG.PROXY || !!(CONFIG.OPENAI_KEY || LS.diKey); }
+function hasLLMKey() { return CONFIG.PROXY || !!LS.diKey; }
 async function llmStep() {
   const payload = {
     temperature: 0.4,
@@ -409,7 +407,7 @@ async function stopConversation() {
 // ---------- realtime voice (OpenAI speech-to-speech) ----------
 let rt = null;
 async function startRealtimeVoice() {
-  if (!CONFIG.PROXY && !CONFIG.OPENAI_KEY) { status("OpenAI key needed for realtime", "err"); return; }
+  if (!CONFIG.PROXY) { status("realtime needs proxy mode (edge functions)", "err"); return; }
   // Make sure the dispenser is connected BEFORE the conversation starts, so a
   // dispense actually runs the motors instead of silently simulating.
   if (!deviceId) { bubble("Connecting to the dispenser first…"); await connectBLE().catch(() => {}); }

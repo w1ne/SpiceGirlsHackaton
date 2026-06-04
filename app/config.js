@@ -18,18 +18,20 @@ export const CONFIG = {
   BLE_SERVICE: "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70",
   BLE_CMD: "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70",
   BLE_STATUS: "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70",
-  // Known dispenser address (Android deviceId == MAC). Lets the app connect
-  // WITHOUT scanning on first run too, sidestepping Android's BLE scan throttle.
-  // Empty string falls back to scanning. Override per-build with VITE_BLE_DEVICE_ID.
-  BLE_DEVICE_ID: import.meta.env.VITE_BLE_DEVICE_ID ?? "9C:13:9E:F4:27:FA",
-  // LLM brain. Keys baked from .env.local at build time (Vite inlines VITE_*).
-  // Prefer OpenAI when its key is present (cleaner tool-calling), else DeepInfra.
+  // Known dispenser address (Android deviceId == MAC). When set, the app connects
+  // WITHOUT scanning, sidestepping Android's BLE scan throttle. Empty by default
+  // so a SHARED build works with ANY dispenser (it scans + matches by name, then
+  // remembers the address). Pin your own board with VITE_BLE_DEVICE_ID in .env.local.
+  BLE_DEVICE_ID: import.meta.env.VITE_BLE_DEVICE_ID ?? "",
+  // LLM brain. In normal use the app calls the llm-proxy / realtime-token edge
+  // functions, which hold the provider key SERVER-SIDE — no OpenAI/DeepInfra key
+  // ever ships in the app. OPENAI_BASE is only the public realtime endpoint used
+  // for the WebRTC SDP exchange (the ephemeral token comes from the edge fn).
   OPENAI_BASE: "https://api.openai.com/v1",
-  OPENAI_MODEL: "gpt-4o-mini",
-  OPENAI_KEY: import.meta.env.VITE_OPENAI_KEY || "",
   REALTIME_MODEL: "gpt-realtime-mini",
   REALTIME_VOICE: "marin",
+  // Local-dev-only direct LLM fallback (VITE_PROXY=0). The key is NEVER baked —
+  // a developer types it into Settings, where it stays in their browser only.
   DEEPINFRA_BASE: "https://api.deepinfra.com/v1/openai",
   LLM_MODEL: "meta-llama/Meta-Llama-3.1-8B-Instruct",
-  DEEPINFRA_KEY: import.meta.env.VITE_DEEPINFRA_KEY || "",
 };

@@ -3,6 +3,15 @@
 Voice-driven smart spice dispenser. Talk to it like a friend, it sets up your
 compartments, asks clarifying questions, and dispenses the right spices.
 
+## 📲 Get the app
+
+**[⬇️ Download SpiceGirls.apk](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest/download/SpiceGirls.apk)** → open it on Android → allow "install from this source".
+
+No setup, no keys to enter — it talks to the hosted backend out of the box. Just
+power the ESP32 dispenser and keep it in Bluetooth range. Sharing notes
+(safety, building your own APK, standing up your own backend): see
+**[SHARING.md](SHARING.md)**.
+
 - **Phone app** (`app/`) — native Android (Capacitor). On-device speech-to-text +
   text-to-speech, clarifying-question LLM on DeepInfra. Talks to the dispenser
   over **BLE**; recipes/compartment config in **Supabase**.
