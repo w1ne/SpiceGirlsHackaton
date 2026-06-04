@@ -26,3 +26,6 @@ firmware/include/secrets.h
 .DS_Store
 .idea/
 .vscode/
+
+# supabase CLI local cache
+supabase/.temp/
