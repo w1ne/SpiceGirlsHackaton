@@ -19,6 +19,11 @@ const LS = {
   // "realtime" (OpenAI speech-to-speech) or "classic" (turn-based STT→LLM→TTS)
   get voiceMode() { return localStorage.getItem("voice_mode") || (CONFIG.OPENAI_KEY || CONFIG.PROXY ? "realtime" : "classic"); },
   set voiceMode(v) { localStorage.setItem("voice_mode", v); },
+  // Last dispenser we connected to (Android deviceId == MAC). Lets us reconnect
+  // WITHOUT scanning — Android throttles an app to zero results after a few
+  // scans, so skipping the scan is what makes reconnect reliable.
+  get deviceId() { return localStorage.getItem("ble_device_id") || CONFIG.BLE_DEVICE_ID || ""; },
+  set deviceId(v) { v ? localStorage.setItem("ble_device_id", v) : localStorage.removeItem("ble_device_id"); },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -164,13 +169,24 @@ async function connectBLE() {
   try {
     status("initialising Bluetooth…");
     await BleClient.initialize({ androidNeverForLocation: true });
-    // Retry scan+connect a few times — BLE scan/connect can transiently miss or
-    // time out, and a retry almost always succeeds without the user re-tapping.
     let lastErr;
-    for (let attempt = 1; attempt <= 3 && !deviceId; attempt++) {
+    // FAST PATH: reconnect straight to the address we used last time — no scan,
+    // so Android's scan throttle can never block us. This is the reliable path
+    // once we've connected once.
+    const known = LS.deviceId;
+    if (known) {
+      try {
+        status("connecting to dispenser…");
+        await BleClient.connect(known, onDisconnect);
+        deviceId = known;
+      } catch (e) { lastErr = e; try { await BleClient.disconnect(known); } catch {} }
+    }
+    // FALLBACK: only scan if we have no remembered device or the direct connect
+    // failed. One scan, then connect — keep scan count low to avoid throttling.
+    for (let attempt = 1; attempt <= 2 && !deviceId; attempt++) {
       let device;
       try {
-        status(attempt === 1 ? "scanning for dispenser…" : `connecting… (try ${attempt})`);
+        status(attempt === 1 ? "scanning for dispenser…" : `scanning… (try ${attempt})`);
         device = await scanForDispenser();
         await BleClient.connect(device.deviceId, onDisconnect);
         deviceId = device.deviceId;
@@ -181,6 +197,7 @@ async function connectBLE() {
       }
     }
     if (!deviceId) throw lastErr || new Error("could not connect");
+    LS.deviceId = deviceId; // remember for the throttle-proof fast path next time
     // Status notifications are best-effort: the firmware's status characteristic
     // may lack a CCCD (subscribe → NotSupported). Dispensing works regardless, so
     // never let a notify failure tear down a good connection.
@@ -220,7 +237,7 @@ async function dispense(plan) {
   bubble(`Dispensing${sim ? " (simulated)" : ""}: ${steps.map((s) => `${slots[s.slot] || "compartment " + s.slot} ×${s.dose_units}`).join(", ")}`);
   if (sim) {
     for (const s of steps) { status(`dispensing ${slots[s.slot] || "compartment " + s.slot}… (sim)`); await sleep(600); }
-    status("✓ done (simulated)", "ok");
+    status("⚠️ simulated — dispenser not connected", "err");
     return;
   }
   // Send each step as its own SHORT write. The BLE default ATT payload is 20
@@ -239,36 +256,27 @@ async function dispense(plan) {
 const ctx = { dispense, saveCompartments, saveMix, getState, setPreference, setAllergens };
 function systemPrompt() {
   const st = getState();
-  const comp = Object.entries(st.compartments).sort((a, b) => +a[0] - +b[0]).map(([n, s]) => `${n}=${s}`).join(", ") || "all empty";
+  const comp = Object.entries(st.compartments).sort((a, b) => +a[0] - +b[0]).map(([n, s]) => `compartment ${n} = ${s}`).join(", ") || "all empty";
   const mixes = st.mixes.length ? st.mixes.map((m) => m.name).join(", ") : "none yet";
   const prefLine = Object.entries(st.preferences || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || "none yet";
   const allergyLine = (st.allergens || []).length ? st.allergens.join(", ") : "none";
-  return `You are the friendly voice and the brain of a smart spice dispenser with 6 compartments (1-6).
-Talk like a warm, concise friend (your words are read aloud). Compartments: ${comp}. Saved mixes: ${mixes}.
-Cook's standing preferences: ${prefLine}. Allergies (NEVER dispense these): ${allergyLine}.
-Honor the preferences when proposing mixes (e.g. go lighter on salt if they like it light). When the cook
-states a lasting taste ("I like it mild") call set_preference; when they mention an allergy call set_allergens.
-A dose_unit is one pinch (servo sweep); there is no scale, so think in relative pinch counts.
+  return `You are the brain of a smart spice dispenser, 6 compartments (1-6).
+Compartments: ${comp}. Saved mixes: ${mixes}. Preferences: ${prefLine}. Allergies (NEVER dispense): ${allergyLine}.
+A dose_unit is one pinch. Your words are read aloud, so be MINIMAL.
 
-You are a knowledgeable cook. When someone names a dish and the flavor they want (e.g. "chicken
-curry, smoky and a little spicy"), REASON about it and PROPOSE a concrete mix:
-- Pick the spices to combine ONLY from what is actually loaded above, choosing what genuinely fits
-  that cuisine and flavor goal. If a classic spice for the dish isn't loaded, say so and suggest the
-  closest loaded substitute.
-- Decide pinch counts per spice that reflect the balance you want (e.g. more paprika for smoky, a
-  pinch of chili for heat), and say the proposed blend out loud in one short sentence with a quick
-  reason ("paprika for smoke, a little cumin for warmth, one chili for the kick").
-- Then ask the cook to confirm or tweak. On confirmation, call dispense with that plan, and offer to
-  save_mix it under a name.
+The compartment list above is COMPLETE and AUTHORITATIVE. NEVER ask which compartment a spice is in —
+look it up in that list yourself. If the cook names a spice that's in the list, you already know its
+compartment; just use it. Only say a spice is unavailable if it's truly not in the list.
 
-Compartment setup is ON-REQUEST ONLY: call set_compartments ONLY when the cook explicitly tells you
-what spice goes in a compartment ("put paprika in 1"). NEVER prompt them to set up, re-confirm, or
-re-load compartments, and once spices are loaded don't bring setup up again — just cook with what's there.
+ACT, DON'T CHATTER. When the cook's intent is clear, call dispense IMMEDIATELY — do NOT ask for
+confirmation, do NOT read the plan back first. Just dispense, then say what you dispensed in ONE short
+sentence ("Two pinches of paprika, one chili — done."). Decide pinch counts yourself; honor preferences
+and never dispense an allergen.
 
-Use your other tools to act: dispense to run the motors; save_mix to remember a blend; get_state to check.
-Ask ONE short clarifying question at a time only when you truly need it (dish? flavor? how spicy?).
-Don't over-ask — once you know the dish and the vibe, propose. Only dispense compartments that actually
-contain a spice.`;
+Only ask a question if you genuinely can't act (dish unknown, or no fitting spice is loaded). One short
+question, never a checklist. Never re-confirm, never re-read the plan, never offer to save unless asked.
+Pick spices ONLY from what's loaded above. set_preference on a lasting taste, set_allergens on an allergy,
+set_compartments ONLY when told what goes where — never prompt for setup.`;
 }
 // Local-dev fallback target (proxy off): prefer OpenAI, else DeepInfra.
 function llmTarget() {
@@ -359,6 +367,10 @@ async function stopConversation() {
 let rt = null;
 async function startRealtimeVoice() {
   if (!CONFIG.PROXY && !CONFIG.OPENAI_KEY) { status("OpenAI key needed for realtime", "err"); return; }
+  // Make sure the dispenser is connected BEFORE the conversation starts, so a
+  // dispense actually runs the motors instead of silently simulating.
+  if (!deviceId) { bubble("Connecting to the dispenser first…"); await connectBLE().catch(() => {}); }
+  if (!deviceId) bubble("⚠️ Dispenser not connected — I'll talk you through it but can't run the motors yet.");
   listening = true; micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
   try {
     rt = await startRealtime({
@@ -430,7 +442,10 @@ $("#saveSettings").onclick = () => { LS.diKey = $("#diKey").value.trim(); LS.tts
 
 // ---------- boot ----------
 (async function init() {
-  bubble("Connect the dispenser, set up compartments, then talk to me 🎙️");
+  bubble("Setting up… connecting to your dispenser 🎙️");
   await loadDevice(); await loadRecipes(); await loadPreferences();
   if (!Object.keys(slots).length) { bubble("First time? Set up your compartments 🧂"); openInit(); }
+  // Auto-connect on launch so the cook never has to tap Connect; silent if the
+  // dispenser isn't powered/in range (the manual button stays as a fallback).
+  connectBLE().catch(() => {});
 })();

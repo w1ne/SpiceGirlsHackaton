@@ -18,6 +18,10 @@ export const CONFIG = {
   BLE_SERVICE: "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70",
   BLE_CMD: "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70",
   BLE_STATUS: "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70",
+  // Known dispenser address (Android deviceId == MAC). Lets the app connect
+  // WITHOUT scanning on first run too, sidestepping Android's BLE scan throttle.
+  // Empty string falls back to scanning. Override per-build with VITE_BLE_DEVICE_ID.
+  BLE_DEVICE_ID: import.meta.env.VITE_BLE_DEVICE_ID ?? "9C:13:9E:F4:27:FA",
   // LLM brain. Keys baked from .env.local at build time (Vite inlines VITE_*).
   // Prefer OpenAI when its key is present (cleaner tool-calling), else DeepInfra.
   OPENAI_BASE: "https://api.openai.com/v1",
