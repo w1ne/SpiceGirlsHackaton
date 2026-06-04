@@ -8,8 +8,7 @@ describe("personas", () => {
       expect(p.name).toBeTruthy();
       expect(p.emoji).toBeTruthy();
       expect(p.prompt).toBeTruthy();
-      expect(p.eleven).toMatch(/^[A-Za-z0-9]+$/); // ElevenLabs voice id
-      expect(p.rtVoice).toBeTruthy();             // OpenAI realtime preset
+      expect(p.rtVoice).toBeTruthy(); // OpenAI realtime preset voice
     }
   });
 

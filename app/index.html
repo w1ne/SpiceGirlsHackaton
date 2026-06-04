@@ -19,7 +19,7 @@
   </header>
 
   <main>
-    <section id="slots" class="slots"></section>
+    <section id="slots"></section>
 
     <section id="recipesWrap" class="recipes-wrap" hidden>
       <div class="recipes-head">🍲 Recipes <small class="muted">tap to make</small></div>
@@ -54,8 +54,8 @@
   <dialog id="personas">
     <form method="dialog">
       <h2>🎭 Choose a character</h2>
-      <p class="muted">Each character has its own personality and voice. Character voices
-        (ElevenLabs) play in Classic voice mode.</p>
+      <p class="muted">Each character has its own personality and voice. Tap
+        <b>Start talking</b> to chat with them, hands-free.</p>
       <div id="personaList" class="persona-list"></div>
       <div class="actions"><button value="close" class="ghost">Close</button></div>
     </form>
@@ -81,11 +81,11 @@
       </label>
       <label>Voice mode
         <select id="voiceMode">
-          <option value="realtime">Realtime (OpenAI, natural)</option>
-          <option value="classic">Classic (turn-based)</option>
+          <option value="realtime">Natural — talk in real time 🎙️</option>
+          <option value="classic">Simple — one line at a time</option>
         </select>
       </label>
-      <label class="row"><input id="ttsOn" type="checkbox" checked /> Speak replies (classic only)</label>
+      <label class="row"><input id="ttsOn" type="checkbox" checked /> Read replies aloud (Simple mode)</label>
       <div class="actions">
         <button id="saveSettings" value="save">Save</button>
         <button value="cancel" class="ghost">Cancel</button>

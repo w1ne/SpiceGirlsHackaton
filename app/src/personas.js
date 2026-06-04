@@ -1,16 +1,12 @@
-// Spice-dispenser personalities. Each persona is a character voice for the
-// assistant: a flavour prompt (personality) layered on top of the functional
-// dispenser instructions, plus a voice for each mode —
-//   classic mode  -> an ElevenLabs voice id (rich character voice)
-//   realtime mode -> an OpenAI preset voice (OpenAI generates the audio there,
-//                    so ElevenLabs can't be used; we pick the closest preset)
+// Spice-dispenser personalities. Each persona is a character for the assistant:
+// a flavour prompt (personality) layered on top of the functional dispenser
+// instructions, plus rtVoice — the OpenAI Realtime preset voice used for the
+// fluent speech-to-speech conversation. The model modulates its delivery from
+// the prompt, so a fiery prompt gives an energetic, punchy read.
 //
 // The flavour ONLY changes tone/word choice. The functional rules (dispense on a
 // clear request, honour the compartment list, allergens) always win — see
 // personaSystemPrompt(), which appends the base instructions after the flavour.
-//
-// ElevenLabs ids below are from the shared default voice library (stable across
-// accounts). Swap freely; an unknown id just falls back to device TTS.
 
 export const PERSONAS = [
   {
@@ -18,7 +14,6 @@ export const PERSONAS = [
     name: "Friendly",
     emoji: "😊",
     blurb: "Warm, concise kitchen buddy",
-    eleven: "cgSgspJ2msm6clMCkdW9", // Jessica — playful, bright, warm
     rtVoice: "marin",
     prompt:
       "You are a warm, upbeat kitchen companion. Friendly and encouraging, but brief.",
@@ -28,7 +23,6 @@ export const PERSONAS = [
     name: "Chef Ramsay",
     emoji: "🔥",
     blurb: "Fiery British chef energy",
-    eleven: "IKne3meq5aSn9XLyUdCD", // Charlie — deep, confident, energetic
     rtVoice: "ash",
     prompt:
       "You are a fiery, exacting British celebrity chef — think roaring kitchen energy. " +
@@ -42,7 +36,6 @@ export const PERSONAS = [
     name: "Nonna Rosa",
     emoji: "👵",
     blurb: "Loving Italian grandmother",
-    eleven: "EXAVITQu4vr4xnSDxMaL", // Sarah — mature, reassuring, confident
     rtVoice: "coral",
     prompt:
       "You are a loving Italian nonna. Warm, doting, a little bossy about food the way family " +
@@ -54,7 +47,6 @@ export const PERSONAS = [
     name: "Sushi Sensei",
     emoji: "🧘",
     blurb: "Calm, precise zen master",
-    eleven: "pqHfZKP75CvOlQylNhV4", // Bill — wise, mature, balanced
     rtVoice: "verse",
     prompt:
       "You are a serene sushi sensei. Calm, deliberate, economical with words. You speak of " +

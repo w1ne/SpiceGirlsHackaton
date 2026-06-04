@@ -28,12 +28,21 @@ footer { padding: 14px; background: var(--panel); border-top: 1px solid #3a2727;
 .slot[data-slot]:active, .slot[data-recipe]:active { background: var(--accent2); color: #1a1212; }
 
 .recipes-wrap { display: flex; flex-direction: column; gap: 6px; }
-.recipes-head { font-size: 13px; color: var(--muted); }
+.recipes-head, .section-head { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.section-head { font-weight: 600; color: var(--text); }
+.empty-cta {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: center;
+  background: var(--panel); border: 1px dashed var(--accent2); color: var(--accent2);
+  padding: 22px; font-size: 16px; font-weight: 600;
+}
+.empty-cta small { color: var(--muted); font-weight: 400; font-size: 13px; }
 
 .chat { display: flex; flex-direction: column; gap: 10px; flex: 1; }
-.msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; }
-.msg.sys { align-self: center; color: var(--muted); font-size: 13px; }
-.msg.bot { align-self: flex-start; background: var(--panel); }
+.msg { max-width: 85%; padding: 10px 14px; border-radius: 16px; white-space: pre-wrap; line-height: 1.45; animation: rise .18s ease-out; }
+.msg.sys { align-self: center; color: var(--muted); font-size: 13px; text-align: center; max-width: 92%; }
+.msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid #3a2727; border-bottom-left-radius: 4px; }
+.msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 .status { font-size: 14px; color: var(--muted); min-height: 20px; }
 .status .ok { color: var(--ok); } .status .err { color: var(--err); }

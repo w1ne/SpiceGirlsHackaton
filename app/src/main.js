@@ -51,10 +51,13 @@ async function loadDevice() {
 function renderSlots() {
   const e = Object.entries(slots).sort((a, b) => +a[0] - +b[0]);
   slotsEl.innerHTML = e.length
-    ? e.map(([s, n]) => `<button class="slot" data-slot="${s}"><b>${n}</b><small>compartment ${s} · tap</small></button>`).join("")
-    : `<div class="slot"><small>no compartments set</small></div>`;
+    ? `<div class="section-head">🧂 Your spices <small class="muted">tap to dispense one pinch</small></div>
+       <div class="slots">${e.map(([s, n]) => `<button class="slot" data-slot="${s}"><b>${n}</b><small>#${s} · tap</small></button>`).join("")}</div>`
+    : `<button class="empty-cta" id="emptyInit">🧂 Set up your spice compartments<small>tell the dispenser what's loaded to get started</small></button>`;
   slotsEl.querySelectorAll(".slot[data-slot]").forEach((el) =>
     (el.onclick = () => dispense([{ slot: +el.dataset.slot, dose_units: 1 }]).catch((e) => status(e.message, "err"))));
+  const cta = slotsEl.querySelector("#emptyInit");
+  if (cta) cta.onclick = openInit;
 }
 async function loadRecipes() {
   const { data } = await sb.from("recipes").select("*").order("name");
@@ -219,7 +222,11 @@ async function connectBLE() {
 }
 function onDisconnect() {
   deviceId = null; bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected");
-  status("dispenser disconnected", "err");
+  status("dispenser disconnected — reconnecting…", "err");
+  // Self-heal: the ESP drops the link if it resets (e.g. re-powered, or USB
+  // re-enumerated). Auto-reconnect so dispenses keep reaching the motors instead
+  // of silently simulating. The fast path (connect by address) makes this quick.
+  if (!listening) setTimeout(() => { if (!deviceId) connectBLE().catch(() => {}); }, 1500);
 }
 function onStatus(value) {
   let s; try { s = JSON.parse(dataViewToText(value)); } catch { return; }
@@ -336,56 +343,12 @@ async function agentTurn(userText) {
   } catch (e) { status(e.message, "err"); bubble("⚠️ " + e.message); }
   finally { busy = false; }
 }
-// Speak a reply in the active persona's voice. Prefer the persona's ElevenLabs
-// character voice (via the tts-eleven edge function, which holds the key); fall
-// back to the device's built-in TTS if that's unavailable or fails.
+// Speak a reply with the device's built-in TTS (used by classic + typed turns).
+// The fluent, in-character voice comes from realtime mode (OpenAI), which
+// generates its own audio; this is just the turn-based fallback.
 async function speak(text) {
-  if (!text) return;
-  const persona = activePersona();
-  // A chosen character's voice ALWAYS plays — that's the whole point of picking
-  // it — so it is NOT gated by the "speak replies" toggle (LS.tts), which only
-  // controls the generic device-TTS fallback below.
-  if (CONFIG.PROXY && persona.eleven) {
-    try {
-      status(`🔊 ${persona.name}…`);
-      const r = await fetch(`${CONFIG.FN_BASE}/tts-eleven`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voiceId: persona.eleven }),
-      });
-      if (r.ok) {
-        const { audio } = await r.json();
-        if (audio) { await playMp3Base64(audio); status(""); return; }
-      } else if (r.status === 502) { status("⚠️ voice unavailable (ElevenLabs limit)", "err"); }
-    } catch { /* fall back to device TTS below */ }
-  }
-  if (LS.tts) { try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {} }
-}
-// Decode a base64 MP3 and play it to completion via the Web Audio API. We avoid
-// Audio()+blob: URLs because the Android WebView can't load blob URLs into media
-// elements; decodeAudioData on the raw bytes works reliably.
-let _audioCtx = null;
-function audioCtx() {
-  _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-  return _audioCtx;
-}
-// Resume the AudioContext from inside a user gesture (a tap). Android blocks
-// audio until a gesture has unlocked it; calling this on "Start talking" means a
-// later speak() (which runs in an async callback, NOT a gesture) can play sound.
-function unlockAudio() {
-  try { const c = audioCtx(); if (c.state === "suspended") c.resume(); } catch {}
-}
-async function playMp3Base64(b64) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const c = audioCtx();
-  if (c.state === "suspended") { try { await c.resume(); } catch {} }
-  const buf = await c.decodeAudioData(bytes.buffer);
-  const src = c.createBufferSource();
-  src.buffer = buf; src.connect(c.destination); src.start(0);
-  await new Promise((resolve) => { src.onended = resolve; });
-  return `ctx=${c.state} ${buf.duration.toFixed(1)}s`;
+  if (!text || !LS.tts) return;
+  try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {}
 }
 
 // ---------- continuous native speech ----------
@@ -468,20 +431,17 @@ function stopRealtimeVoice() {
 
 micBtn.onclick = () => {
   if (listening) return rt ? stopRealtimeVoice() : stopConversation();
-  unlockAudio(); // this tap is a user gesture — unlock audio so speak() can play later
   return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
 };
 
 // Typed commands — a reliable input path that doesn't depend on speech
-// recognition. Runs the exact same agent turn, so the reply speaks in the active
-// persona's voice. Submitting is a user gesture, so audio is unlocked here too.
+// recognition. Runs the same agent turn (LLM + tools + device-TTS reply).
 $("#typeForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const el = $("#typeInput");
   const text = el.value.trim();
   if (!text || busy) return;
   el.value = "";
-  unlockAudio();
   if (!hasLLMKey()) { openSettings(); status("add an API key for voice", "err"); return; }
   agentTurn(text);
 });
@@ -536,9 +496,9 @@ function syncPersonaChip() {
 }
 function selectPersona(id) {
   LS.persona = id;
-  // Characters shine in Classic mode (their ElevenLabs voice); the plain
-  // Friendly default rides the faster realtime path.
-  LS.voiceMode = id === DEFAULT_PERSONA_ID ? "realtime" : "classic";
+  // Every character uses the fluent realtime voice (OpenAI speech-to-speech)
+  // with its own preset voice; the model reads the personality from the prompt.
+  LS.voiceMode = "realtime";
   syncPersonaChip();
   const p = activePersona();
   bubble(`${p.emoji} ${p.name} is now your spice guide.`, "bot");
