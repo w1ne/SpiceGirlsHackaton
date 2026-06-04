@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Spice Girls 🌶️</title>
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <header>
+    <h1>🌶️ Spice&nbsp;Girls</h1>
+    <button id="bleBtn" class="chip-btn">🔗 Connect</button>
+  </header>
+
+  <main>
+    <section id="slots" class="slots"></section>
+
+    <section id="recipesWrap" class="recipes-wrap" hidden>
+      <div class="recipes-head">🍲 Recipes <small class="muted">tap to make</small></div>
+      <div id="recipes" class="slots"></div>
+    </section>
+
+    <section id="chat" class="chat"></section>
+    <div id="status" class="status"></div>
+  </main>
+
+  <footer>
+    <button id="demoInfo" class="ghost">Tap a spice or recipe to dispense</button>
+  </footer>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

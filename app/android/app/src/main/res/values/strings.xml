@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SpiceGirls</string>
+    <string name="title_activity_main">SpiceGirls</string>
+    <string name="package_name">com.spicegirls.dispenser</string>
+    <string name="custom_url_scheme">com.spicegirls.dispenser</string>
+</resources>
