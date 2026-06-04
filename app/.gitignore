@@ -14,3 +14,7 @@ android/app/src/main/assets/capacitor.plugins.json
 *.apk
 *.keystore
 .DS_Store
+
+# build-time secrets (key baked into APK, never committed)
+.env.local
+!.env.local.example

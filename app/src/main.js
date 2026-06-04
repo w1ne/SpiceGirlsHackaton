@@ -10,7 +10,8 @@ let deviceId = null;        // connected BLE device
 let listening = false, busy = false;
 
 const LS = {
-  get diKey() { return localStorage.getItem("di_key") || ""; },
+  // baked-in key from build (.env.local) by default; settings can override
+  get diKey() { return localStorage.getItem("di_key") || CONFIG.DEEPINFRA_KEY || ""; },
   set diKey(v) { localStorage.setItem("di_key", v); },
   get tts() { return localStorage.getItem("tts") !== "0"; },
   set tts(v) { localStorage.setItem("tts", v ? "1" : "0"); },
