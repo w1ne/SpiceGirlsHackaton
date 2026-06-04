@@ -49,5 +49,4 @@ cd android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Quick BLE test without the phone: `python tools/ble_test.py '{"slot":1,"dose_units":1}'`.
-Secrets (`.env`, `.env.local`, `firmware/include/secrets.h`) are git-ignored.
+Quick BLE test without the phone (Linux): `python tools/ble_test.py '{"slot":1,"dose_units":1}'`. 
