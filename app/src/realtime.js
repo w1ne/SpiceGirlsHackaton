@@ -56,10 +56,15 @@ export async function startRealtime({ instructions, tools, onToolCall, onUserTex
       type: "session.update",
       session: {
         type: "realtime", instructions, tools, tool_choice: "auto",
-        // Explicit server-side VAD: the model decides turns from silence, and
-        // input transcription is on so we get the cook's text.
-        turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 600 },
-        input_audio_transcription: { model: "whisper-1" },
+        // In the realtime session schema, VAD + input transcription live under
+        // audio.input (NOT at the session top level — that 400s with
+        // "unknown parameter: session.turn_detection").
+        audio: {
+          input: {
+            turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 600 },
+            transcription: { model: "whisper-1" },
+          },
+        },
       },
     });
     // greet immediately — confirms audio-out works before the user even speaks
