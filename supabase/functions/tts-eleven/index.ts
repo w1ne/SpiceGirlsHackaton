@@ -25,18 +25,27 @@ Deno.serve(async (req) => {
   if (!text) return json({ error: "text required" }, 400);
   if (!voiceId) return json({ error: "voiceId required" }, 400);
 
-  const upstream = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
-    {
-      method: "POST",
-      headers: { "xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ text, model_id: body.modelId ?? DEFAULT_MODEL }),
-    },
-  );
+  // ElevenLabs' free tier intermittently rejects server-originated calls with
+  // 401 "detected_unusual_activity". Retry a couple of times — it usually
+  // succeeds on a later attempt. (A paid plan removes the restriction entirely.)
+  let upstream: Response | null = null;
+  let lastDetail = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    upstream = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: { "xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ text, model_id: body.modelId ?? DEFAULT_MODEL }),
+      },
+    );
+    if (upstream.ok) break;
+    lastDetail = await upstream.text();
+    await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+  }
 
-  if (!upstream.ok) {
-    const detail = await upstream.text();
-    return json({ error: `elevenlabs ${upstream.status}: ${detail.slice(0, 200)}` }, 502);
+  if (!upstream || !upstream.ok) {
+    return json({ error: `elevenlabs ${upstream?.status}: ${lastDetail.slice(0, 200)}` }, 502);
   }
 
   // Return the MP3 as base64 JSON, NOT raw binary. The phone's HTTP layer

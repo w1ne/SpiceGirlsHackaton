@@ -340,11 +340,14 @@ async function agentTurn(userText) {
 // character voice (via the tts-eleven edge function, which holds the key); fall
 // back to the device's built-in TTS if that's unavailable or fails.
 async function speak(text) {
-  if (!LS.tts || !text) return;
+  if (!text) return;
   const persona = activePersona();
+  // A chosen character's voice ALWAYS plays — that's the whole point of picking
+  // it — so it is NOT gated by the "speak replies" toggle (LS.tts), which only
+  // controls the generic device-TTS fallback below.
   if (CONFIG.PROXY && persona.eleven) {
     try {
-      status(`🔊 ${persona.name} voice…`);
+      status(`🔊 ${persona.name}…`);
       const r = await fetch(`${CONFIG.FN_BASE}/tts-eleven`, {
         method: "POST",
         headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
@@ -352,11 +355,11 @@ async function speak(text) {
       });
       if (r.ok) {
         const { audio } = await r.json();
-        if (audio) { const st = await playMp3Base64(audio); status(`🔊 played (${st})`, "ok"); return; }
-      } else { const t = (await r.text()).slice(0, 120); status(`⚠️ voice ${r.status}: ${t}`, "err"); }
-    } catch (e) { status(`⚠️ voice err: ${e?.message || e}`, "err"); }
+        if (audio) { await playMp3Base64(audio); status(""); return; }
+      } else if (r.status === 502) { status("⚠️ voice unavailable (ElevenLabs limit)", "err"); }
+    } catch { /* fall back to device TTS below */ }
   }
-  try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {}
+  if (LS.tts) { try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {} }
 }
 // Decode a base64 MP3 and play it to completion via the Web Audio API. We avoid
 // Audio()+blob: URLs because the Android WebView can't load blob URLs into media
@@ -468,6 +471,20 @@ micBtn.onclick = () => {
   unlockAudio(); // this tap is a user gesture — unlock audio so speak() can play later
   return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
 };
+
+// Typed commands — a reliable input path that doesn't depend on speech
+// recognition. Runs the exact same agent turn, so the reply speaks in the active
+// persona's voice. Submitting is a user gesture, so audio is unlocked here too.
+$("#typeForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const el = $("#typeInput");
+  const text = el.value.trim();
+  if (!text || busy) return;
+  el.value = "";
+  unlockAudio();
+  if (!hasLLMKey()) { openSettings(); status("add an API key for voice", "err"); return; }
+  agentTurn(text);
+});
 
 // ---------- motor control buttons ----------
 function openMotors() {
