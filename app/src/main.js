@@ -8,6 +8,7 @@ import { startRealtime } from "./realtime.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
+let prefs = {}, allergens = [];
 let deviceId = null, listening = false, busy = false;
 
 const LS = {
@@ -16,7 +17,7 @@ const LS = {
   get tts() { return localStorage.getItem("tts") !== "0"; },
   set tts(v) { localStorage.setItem("tts", v ? "1" : "0"); },
   // "realtime" (OpenAI speech-to-speech) or "classic" (turn-based STT→LLM→TTS)
-  get voiceMode() { return localStorage.getItem("voice_mode") || (CONFIG.OPENAI_KEY ? "realtime" : "classic"); },
+  get voiceMode() { return localStorage.getItem("voice_mode") || (CONFIG.OPENAI_KEY || CONFIG.PROXY ? "realtime" : "classic"); },
   set voiceMode(v) { localStorage.setItem("voice_mode", v); },
 };
 
@@ -75,7 +76,33 @@ async function saveMix(name, steps) {
   bubble(`Saved mix "${name}" 📖`); await loadRecipes();
 }
 function getState() {
-  return { compartments: slots, mixes: recipes.map((r) => ({ name: r.name, steps: r.steps })) };
+  return {
+    compartments: slots,
+    mixes: recipes.map((r) => ({ name: r.name, steps: r.steps })),
+    preferences: prefs,
+    allergens,
+  };
+}
+
+// ---------- preferences + allergens (#4 personalization) ----------
+async function loadPreferences() {
+  const { data } = await sb.from("preferences").select("key,value").eq("user_id", "shared");
+  prefs = {}; allergens = [];
+  for (const row of data || []) {
+    if (row.key === "allergens") allergens = String(row.value || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    else prefs[row.key] = row.value;
+  }
+}
+async function setPreference(key, value) {
+  const { error } = await sb.from("preferences").upsert({ user_id: "shared", key, value }, { onConflict: "user_id,key" });
+  if (error) throw new Error(error.message);
+  prefs[key] = value; bubble(`Noted: ${key} = ${value} 📝`);
+}
+async function setAllergens(spices) {
+  const list = [...new Set((spices || []).map((s) => String(s).toLowerCase().trim()).filter(Boolean))];
+  const { error } = await sb.from("preferences").upsert({ user_id: "shared", key: "allergens", value: list.join(",") }, { onConflict: "user_id,key" });
+  if (error) throw new Error(error.message);
+  allergens = list; bubble(list.length ? `⚠️ Allergens set: ${list.join(", ")} — I'll never dispense these.` : "Allergens cleared.");
 }
 
 // ---------- BLE ----------
@@ -83,10 +110,19 @@ async function connectBLE() {
   try {
     status("initialising Bluetooth…");
     await BleClient.initialize({ androidNeverForLocation: true });
-    const device = await BleClient.requestDevice({ services: [CONFIG.BLE_SERVICE] });
+    // Discover by NAME, not by an offloaded service-UUID scan filter: Android's
+    // hardware filter fails to match our 128-bit service UUID on some phones
+    // (Pixel) so the device never appears. Scanning unfiltered + matching the
+    // name client-side is reliable; optionalServices keeps GATT access on connect.
+    const device = await BleClient.requestDevice({ namePrefix: "SpiceGirls", optionalServices: [CONFIG.BLE_SERVICE] });
     await BleClient.connect(device.deviceId, onDisconnect);
     deviceId = device.deviceId;
-    await BleClient.startNotifications(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_STATUS, onStatus);
+    // Status notifications are best-effort: the firmware's status characteristic
+    // may lack a CCCD (subscribe → NotSupported). Dispensing works regardless, so
+    // never let a notify failure tear down a good connection.
+    try {
+      await BleClient.startNotifications(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_STATUS, onStatus);
+    } catch (e) { console.warn("status notifications unavailable:", e?.message || e); }
     bleBtn.textContent = "🟢 Dispenser"; bleBtn.classList.add("connected");
     status("dispenser connected", "ok"); bubble("Dispenser connected over Bluetooth ✅");
   } catch (e) { status("BLE: " + (e.message || e), "err"); }
@@ -124,13 +160,18 @@ async function dispense(plan) {
 }
 
 // ---------- agent (DeepInfra + tool calling) ----------
-const ctx = { dispense, saveCompartments, saveMix, getState };
+const ctx = { dispense, saveCompartments, saveMix, getState, setPreference, setAllergens };
 function systemPrompt() {
   const st = getState();
   const comp = Object.entries(st.compartments).sort((a, b) => +a[0] - +b[0]).map(([n, s]) => `${n}=${s}`).join(", ") || "all empty";
   const mixes = st.mixes.length ? st.mixes.map((m) => m.name).join(", ") : "none yet";
+  const prefLine = Object.entries(st.preferences || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || "none yet";
+  const allergyLine = (st.allergens || []).length ? st.allergens.join(", ") : "none";
   return `You are the friendly voice and the brain of a smart spice dispenser with 6 compartments (1-6).
 Talk like a warm, concise friend (your words are read aloud). Compartments: ${comp}. Saved mixes: ${mixes}.
+Cook's standing preferences: ${prefLine}. Allergies (NEVER dispense these): ${allergyLine}.
+Honor the preferences when proposing mixes (e.g. go lighter on salt if they like it light). When the cook
+states a lasting taste ("I like it mild") call set_preference; when they mention an allergy call set_allergens.
 A dose_unit is one pinch (servo sweep); there is no scale, so think in relative pinch counts.
 
 You are a knowledgeable cook. When someone names a dish and the flavor they want (e.g. "chicken
@@ -153,23 +194,30 @@ Ask ONE short clarifying question at a time only when you truly need it (dish? f
 Don't over-ask — once you know the dish and the vibe, propose. Only dispense compartments that actually
 contain a spice.`;
 }
-// prefer OpenAI (cleaner tool-calling) when its key is baked in, else DeepInfra
+// Local-dev fallback target (proxy off): prefer OpenAI, else DeepInfra.
 function llmTarget() {
   return CONFIG.OPENAI_KEY
     ? { url: `${CONFIG.OPENAI_BASE}/chat/completions`, key: CONFIG.OPENAI_KEY, model: CONFIG.OPENAI_MODEL }
     : { url: `${CONFIG.DEEPINFRA_BASE}/chat/completions`, key: LS.diKey, model: CONFIG.LLM_MODEL };
 }
-function hasLLMKey() { return !!(CONFIG.OPENAI_KEY || LS.diKey); }
+// In proxy mode the key lives server-side, so no client key is needed.
+function hasLLMKey() { return CONFIG.PROXY || !!(CONFIG.OPENAI_KEY || LS.diKey); }
 async function llmStep() {
-  const t = llmTarget();
-  const r = await fetch(t.url, {
+  const payload = {
+    temperature: 0.4,
+    messages: [{ role: "system", content: systemPrompt() }, ...messages],
+    tools: TOOL_DEFS, tool_choice: "auto",
+  };
+  let url, key;
+  if (CONFIG.PROXY) {
+    url = `${CONFIG.FN_BASE}/llm-proxy`; key = CONFIG.SUPABASE_ANON_KEY; // server holds the provider key
+  } else {
+    const t = llmTarget(); url = t.url; key = t.key; payload.model = t.model;
+  }
+  const r = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${t.key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: t.model, temperature: 0.4,
-      messages: [{ role: "system", content: systemPrompt() }, ...messages],
-      tools: TOOL_DEFS, tool_choice: "auto",
-    }),
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
   if (!r.ok) throw new Error(`LLM ${r.status}: ${(await r.text()).slice(0, 120)}`);
   return (await r.json()).choices?.[0]?.message || { content: "…" };
@@ -234,7 +282,7 @@ async function stopConversation() {
 // ---------- realtime voice (OpenAI speech-to-speech) ----------
 let rt = null;
 async function startRealtimeVoice() {
-  if (!CONFIG.OPENAI_KEY) { status("OpenAI key needed for realtime", "err"); return; }
+  if (!CONFIG.PROXY && !CONFIG.OPENAI_KEY) { status("OpenAI key needed for realtime", "err"); return; }
   listening = true; micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
   try {
     rt = await startRealtime({
@@ -243,6 +291,7 @@ async function startRealtimeVoice() {
       onToolCall: (name, args) => runTool(name, args, ctx),
       onUserText: (t) => bubble(t, "user"),
       onBotText: (t) => bubble(t, "bot"),
+      onIdle: () => { bubble("Paused after a quiet minute — tap to talk again 💤"); stopRealtimeVoice(); },
       log: (kind, text) => {
         if (kind === "err") { status(text, "err"); bubble("⚠️ " + text); }
         else if (kind === "tool") bubble("🔧 " + text);
@@ -306,6 +355,6 @@ $("#saveSettings").onclick = () => { LS.diKey = $("#diKey").value.trim(); LS.tts
 // ---------- boot ----------
 (async function init() {
   bubble("Connect the dispenser, set up compartments, then talk to me 🎙️");
-  await loadDevice(); await loadRecipes();
+  await loadDevice(); await loadRecipes(); await loadPreferences();
   if (!Object.keys(slots).length) { bubble("First time? Set up your compartments 🧂"); openInit(); }
 })();

@@ -1,7 +1,16 @@
 // Client-public config. Supabase anon key is meant to ship in the client.
-// The DeepInfra key is entered at runtime (Phase 2 voice), never committed.
+//
+// PROXY mode (default): the LLM call and the realtime token are minted by
+// Supabase Edge Functions (llm-proxy / realtime-token) that hold the provider
+// keys server-side — so NO OpenAI/DeepInfra key ships in the APK. The VITE_*
+// key fields below stay empty in production; they exist only as a local-dev
+// fallback when you set VITE_PROXY=0 and bake keys into .env.local.
+const SUPABASE_URL = "https://tlgtyskedenqffikfuzx.supabase.co";
 export const CONFIG = {
-  SUPABASE_URL: "https://tlgtyskedenqffikfuzx.supabase.co",
+  SUPABASE_URL,
+  // Route the brain + realtime token through edge functions unless explicitly off.
+  PROXY: (import.meta.env.VITE_PROXY ?? "1") !== "0",
+  FN_BASE: `${SUPABASE_URL}/functions/v1`,
   SUPABASE_ANON_KEY:
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsZ3R5c2tlZGVucWZmaWtmdXp4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1NTg4NDMsImV4cCI6MjA5NjEzNDg0M30.Pkb2WU2Mh7U3gbseRZPQ_B56Lt6VA_rY8oUR3FQetLY",
   DEVICE_ID: "dispenser-01",
