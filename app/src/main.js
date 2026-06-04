@@ -403,33 +403,34 @@ async function listenLoop() {
   while (listening) {
     try {
       if (!busy) status("listening — just talk", "");
-      // partialResults:false makes start() BLOCK until a final result, so the
-      // loop runs once per utterance instead of spinning (partialResults:true
-      // resolves immediately, which turned this into a tight restart loop that
-      // hammered the recognizer with "busy" errors and froze the app).
+      // partialResults:false makes start() BLOCK for the whole listen (~5s) until
+      // a final result, so the loop paces itself — no spin. We keep the gap
+      // between listens tiny so the mic is open almost continuously and doesn't
+      // miss speech that lands between windows.
       const res = await SpeechRecognition.start({ language: "en-US", maxResults: 1, partialResults: false, popup: false });
+      if (!listening) break; // Stop was tapped while we were listening
       interimEl.textContent = "";
       const text = res?.matches?.[0];
-      if (text && listening) await agentTurn(text);
-      // Brief pause so the recognizer fully releases before the next start —
-      // otherwise rapid restarts hit "RecognitionService busy".
-      await sleep(300);
+      if (text) await agentTurn(text);
+      await sleep(120);
     } catch (_) {
-      // start() can fail INSTANTLY ("RecognitionService busy", "Client side
-      // error"). Without a backoff the while-loop would spin thousands of times
-      // a second hammering the recognizer and freezing the app. Back off, then
-      // retry — also make sure any half-open session is stopped first.
+      // start() rejects on "No match" (silence) or "busy". Bail out fast if Stop
+      // was tapped; otherwise a short backoff (NOT a spin — start() already
+      // blocked) then listen again.
+      if (!listening) break;
       try { await SpeechRecognition.stop(); } catch {}
-      await sleep(600);
+      await sleep(250);
     }
   }
 }
 async function stopConversation() {
+  // Update the UI FIRST, synchronously — so the tap visibly stops it even if the
+  // native stop()/removeAllListeners() calls below are slow or hang.
   listening = false;
-  try { await SpeechRecognition.stop(); } catch {}
-  try { await SpeechRecognition.removeAllListeners(); } catch {}
   micBtn.textContent = "🎙️ Start talking"; micBtn.classList.remove("listening");
   interimEl.textContent = ""; status("");
+  try { await SpeechRecognition.stop(); } catch {}
+  try { await SpeechRecognition.removeAllListeners(); } catch {}
 }
 // ---------- realtime voice (OpenAI speech-to-speech) ----------
 let rt = null;
