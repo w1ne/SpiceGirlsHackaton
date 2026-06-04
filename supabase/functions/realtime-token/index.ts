@@ -5,6 +5,7 @@
 // Deploy:  supabase functions deploy realtime-token
 // Secrets: supabase secrets set OPENAI_KEY=sk-...
 import { preflight, json } from "../_shared/cors.ts";
+import { rateLimit } from "../_shared/ratelimit.ts";
 
 const OPENAI_KEY = Deno.env.get("OPENAI_KEY") ?? "";
 const REALTIME_MODEL = Deno.env.get("REALTIME_MODEL") ?? "gpt-realtime-mini";
@@ -14,6 +15,10 @@ Deno.serve(async (req) => {
   const pf = preflight(req);
   if (pf) return pf;
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
+
+  const limited = await rateLimit(req, "rt", 10); // 10 voice sessions / 60s / IP
+  if (limited) return limited;
+
   if (!OPENAI_KEY) return json({ error: "OPENAI_KEY not configured on server" }, 500);
 
   // The phone may request a per-persona voice; fall back to the configured default.

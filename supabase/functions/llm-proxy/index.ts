@@ -10,6 +10,7 @@
 //          supabase secrets set DEEPINFRA_KEY=...
 // verify_jwt stays ON (default): callers must present the Supabase anon JWT.
 import { preflight, json } from "../_shared/cors.ts";
+import { rateLimit } from "../_shared/ratelimit.ts";
 
 const OPENAI_KEY = Deno.env.get("OPENAI_KEY") ?? "";
 const DEEPINFRA_KEY = Deno.env.get("DEEPINFRA_KEY") ?? "";
@@ -26,6 +27,9 @@ Deno.serve(async (req) => {
   const pf = preflight(req);
   if (pf) return pf;
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
+
+  const limited = await rateLimit(req, "llm", 30); // 30 LLM calls / 60s / IP
+  if (limited) return limited;
 
   const t = target();
   if (!t) return json({ error: "no LLM key configured on server" }, 500);
