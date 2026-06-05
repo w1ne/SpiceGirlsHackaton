@@ -54,8 +54,15 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
     // full duplex, barge-in works, the bot never hears itself.
     await setInCallAudio(true);
     mic = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: {
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        // Platform voice isolation (separates the speaking voice from kitchen
+        // noise at the OS level). Harmless no-op where the WebView doesn't
+        // support it yet — Android support is rolling out behind ChromeOS.
+        voiceIsolation: true,
+      },
     });
+    console.log("[rt] mic settings:", JSON.stringify(mic.getAudioTracks()[0]?.getSettings?.() || {}));
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
 
     // 3) data channel for events + tool calls
@@ -79,9 +86,11 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
             input: {
               // Semantic VAD instead of amplitude VAD: it ends the turn based on
               // WHAT was said, not on how loud the room is — kitchen clatter stops
-              // triggering replies, and answers start as soon as the sentence
-              // sounds finished instead of after a fixed 900ms of silence.
-              turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: true, interrupt_response: true },
+              // triggering replies. eagerness LOW: cooks talk slowly while thinking
+              // ("two pinches of… ehm… paprika") and "auto" was cutting the phrase
+              // at the pause; low waits until you've clearly finished. Cost: the
+              // reply starts a beat later.
+              turn_detection: { type: "semantic_vad", eagerness: "low", create_response: true, interrupt_response: true },
               // The phone sits on the counter, not at the cook's mouth.
               noise_reduction: { type: "far_field" },
               // whisper-1 hallucinates words out of noise-triggered buffers ("words

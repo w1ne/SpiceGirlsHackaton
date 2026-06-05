@@ -37,12 +37,22 @@ public class AudioModePlugin extends Plugin {
     private void setSpeaker(AudioManager am, boolean on) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (on) {
+                // Prefer a headset when one is connected — its mic sits at the
+                // cook's mouth, which beats any noise suppression the counter-top
+                // mic can do. Otherwise fall back to the loudspeaker.
+                AudioDeviceInfo speaker = null, headset = null;
                 for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
-                    if (d.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
-                        am.setCommunicationDevice(d);
-                        return;
+                    int t = d.getType();
+                    if (t == AudioDeviceInfo.TYPE_WIRED_HEADSET
+                            || t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                            || t == AudioDeviceInfo.TYPE_BLE_HEADSET) {
+                        if (headset == null) headset = d;
+                    } else if (t == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                        speaker = d;
                     }
                 }
+                AudioDeviceInfo pick = headset != null ? headset : speaker;
+                if (pick != null) am.setCommunicationDevice(pick);
             } else {
                 am.clearCommunicationDevice();
             }

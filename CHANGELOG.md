@@ -5,6 +5,15 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.2.1 (unreleased)
+
+- **Hears you better in a loud kitchen.** Enables the platform's voice
+  isolation where the WebView supports it, prefers a connected headset's
+  mic over the counter-top phone mic (wired or Bluetooth — its mic is at
+  your mouth), and the turn detector is now patient with slow, thinking
+  speech ("two pinches of… ehm…") instead of cutting the phrase at the
+  pause. Replies start a beat later in exchange.
+
 ## v1.2.0
 
 - **Hell's Kitchen mode.** 🔥 toggle in the header: the dispenser plays real
