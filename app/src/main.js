@@ -5,6 +5,7 @@ import { TextToSpeech } from "@capacitor-community/text-to-speech";
 import { CONFIG } from "../config.js";
 import { TOOL_DEFS, runTool, realtimeTools } from "./tools.js";
 import { startRealtime } from "./realtime.js";
+import { createVoiceGate } from "./voiceGate.js";
 import { PERSONAS, DEFAULT_PERSONA_ID, getPersona, personaSystemPrompt } from "./personas.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
@@ -227,7 +228,9 @@ function onDisconnect() {
   // Self-heal: the ESP drops the link if it resets (e.g. re-powered, or USB
   // re-enumerated). Auto-reconnect so dispenses keep reaching the motors instead
   // of silently simulating. The fast path (connect by address) makes this quick.
-  if (!listening) setTimeout(() => { if (!deviceId) connectBLE().catch(() => {}); }, 1500);
+  // (Skipped during a voice session — classic loop OR realtime — as before;
+  // dispense() verifies the link via ensureLive anyway.)
+  if (!listening && !voiceGate.active) setTimeout(() => { if (!deviceId) connectBLE().catch(() => {}); }, 1500);
 }
 let statusWaiters = [];
 function onStatus(value) {
@@ -393,24 +396,30 @@ async function agentTurn(userText) {
 }
 // Speak a reply with the device's built-in TTS (used by classic + typed turns).
 // The fluent, in-character voice comes from realtime mode (OpenAI), which
-// generates its own audio; this is just the turn-based fallback.
+// generates its own audio; this is just the turn-based fallback. NEVER layer
+// device TTS on top of a live realtime session — typing a command while
+// realtime was up used to play two voices at once.
 async function speak(text) {
-  if (!text || !LS.tts) return;
+  if (!text || !LS.tts || voiceGate.active) return;
   try { await TextToSpeech.speak({ text, lang: "en-US", rate: 1.0 }); } catch {}
 }
 
 // ---------- continuous native speech ----------
 async function startConversation() {
+  if (listening) return; // single-flight — a double-tap must not spawn a second listen loop
   if (!hasLLMKey()) { openSettings(); status("add an API key for voice", "err"); return; }
+  // Claim the mic SYNCHRONOUSLY, before any await — so the very next tap routes
+  // to Stop instead of starting a second loop while we're still initialising.
+  listening = true; micBtn.textContent = "⏹ Stop listening"; micBtn.classList.add("listening");
   try {
     const { available } = await SpeechRecognition.available();
-    if (!available) { status("speech recognition unavailable", "err"); return; }
+    if (!available) { stopConversation(); status("speech recognition unavailable", "err"); return; }
     const perm = await SpeechRecognition.requestPermissions();
-    if (perm.speechRecognition !== "granted") { status("microphone permission denied", "err"); return; }
-  } catch (e) { status("speech init: " + (e.message || e), "err"); return; }
+    if (perm.speechRecognition !== "granted") { stopConversation(); status("microphone permission denied", "err"); return; }
+  } catch (e) { stopConversation(); status("speech init: " + (e.message || e), "err"); return; }
+  if (!listening) return; // Stop was tapped while we were asking for permissions
   await SpeechRecognition.removeAllListeners();
   await SpeechRecognition.addListener("partialResults", (d) => { if (d.matches && d.matches[0]) interimEl.textContent = d.matches[0]; });
-  listening = true; micBtn.textContent = "⏹ Stop listening"; micBtn.classList.add("listening");
   listenLoop();
 }
 async function listenLoop() {
@@ -447,38 +456,53 @@ async function stopConversation() {
   try { await SpeechRecognition.removeAllListeners(); } catch {}
 }
 // ---------- realtime voice (OpenAI speech-to-speech) ----------
-let rt = null;
+// The gate is the ONLY owner of the realtime session. Starting takes seconds
+// (token + mic + SDP); the gate makes a tap during that window an honest Stop
+// (the session is killed the moment it lands) and makes a second concurrent
+// session — the "two voices at once" bug — impossible.
+const voiceGate = createVoiceGate();
 async function startRealtimeVoice() {
+  if (voiceGate.active) return;
   if (!CONFIG.PROXY) { status("realtime needs proxy mode (edge functions)", "err"); return; }
-  // Make sure the dispenser is connected BEFORE the conversation starts, so a
-  // dispense actually runs the motors instead of silently simulating.
-  if (!deviceId) { bubble("Connecting to the dispenser first…"); await connectBLE().catch(() => {}); }
-  if (!deviceId) bubble("⚠️ Dispenser not connected — I'll talk you through it but can't run the motors yet.");
-  listening = true; micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
+  micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
+  // If Stop is tapped while we're still starting, the gate kills the session
+  // when it lands — and this gen check mutes its leftover startup callbacks
+  // (so a dead start can't scribble "opening mic…" over the idle UI).
+  const myGen = voiceGate.gen;
+  const stale = () => voiceGate.gen !== myGen;
   try {
-    rt = await startRealtime({
-      instructions: systemPrompt(),
-      voice: activePersona().rtVoice, // OpenAI preset for the active character
-      tools: realtimeTools(),
-      onToolCall: (name, args) => runTool(name, args, ctx),
-      onUserText: (t) => bubble(t, "user"),
-      onBotText: (t) => bubble(t, "bot"),
-      onIdle: () => { bubble("Paused after a quiet minute — tap to talk again 💤"); stopRealtimeVoice(); },
-      log: (kind, text) => {
-        if (kind === "err") { status(text, "err"); bubble("⚠️ " + text); }
-        else if (kind === "tool") bubble("🔧 " + text);
-        else status(text, "ok");
-      },
+    const session = await voiceGate.start(async () => {
+      // Make sure the dispenser is connected BEFORE the conversation starts, so a
+      // dispense actually runs the motors instead of silently simulating.
+      if (!deviceId) { bubble("Connecting to the dispenser first…"); await connectBLE().catch(() => {}); }
+      if (!deviceId) bubble("⚠️ Dispenser not connected — I'll talk you through it but can't run the motors yet.");
+      return startRealtime({
+        instructions: systemPrompt(),
+        voice: activePersona().rtVoice, // OpenAI preset for the active character
+        tools: realtimeTools(),
+        onToolCall: (name, args) => runTool(name, args, ctx),
+        onUserText: (t) => { if (!stale()) bubble(t, "user"); },
+        onBotText: (t) => { if (!stale()) bubble(t, "bot"); },
+        onIdle: () => { if (stale()) return; bubble("Paused after a quiet minute — tap to talk again 💤"); stopRealtimeVoice(); },
+        log: (kind, text) => {
+          if (stale()) return;
+          if (kind === "err") { status(text, "err"); bubble("⚠️ " + text); }
+          else if (kind === "tool") bubble("🔧 " + text);
+          else status(text, "ok");
+        },
+      });
     });
+    if (!session) return; // duplicate tap, or Stop landed mid-startup (UI already reset)
   } catch (e) { status("realtime: " + (e.message || e), "err"); bubble("⚠️ " + (e.message || e)); stopRealtimeVoice(); }
 }
 function stopRealtimeVoice() {
-  try { rt && rt.stop(); } catch {}
-  rt = null; listening = false; micBtn.textContent = "🎙️ Start talking"; micBtn.classList.remove("listening"); status("");
+  voiceGate.stop(); // also kills a session still mid-startup, the moment it lands
+  micBtn.textContent = "🎙️ Start talking"; micBtn.classList.remove("listening"); status("");
 }
 
 micBtn.onclick = () => {
-  if (listening) return rt ? stopRealtimeVoice() : stopConversation();
+  if (voiceGate.active) return stopRealtimeVoice();
+  if (listening) return stopConversation();
   return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
 };
 
