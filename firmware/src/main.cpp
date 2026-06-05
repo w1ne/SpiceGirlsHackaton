@@ -38,15 +38,18 @@
 #define SHUTTER_OPEN     120
 #define SHUTTER_DWELL_MS 300
 
-// --- revolver drive selection (feature flag) ---------------------------------
-// 1 = Feetech STS3215 smart bus servo on Serial1 (absolute encoder, verified moves)
-// 0 = MG90S-360 continuous servo on PCA9685 ch8 (open-loop timed stepping)
+// --- revolver drive (runtime auto-select) -------------------------------------
+// BOTH revolver drivers are compiled in. At boot the firmware probes the STS
+// bus: if an STS3215 answers, the revolver runs closed-loop off its absolute
+// encoder; otherwise it falls back to the MG90S-360 open-loop timed stepping
+// on PCA ch8. One firmware serves both prototypes — the STS simply isn't
+// connected on the PWM version. Set REVOLVER_USE_STS3215 to 0 to skip the STS
+// probe entirely (pure PWM build, frees Serial1/GP7).
 #define REVOLVER_USE_STS3215 1
 
 #define NUM_SLOTS         6
 
-#if REVOLVER_USE_STS3215
-// --- revolver: Feetech STS3215 smart bus servo (absolute magnetic encoder) ---
+// --- revolver option A: Feetech STS3215 smart bus servo (absolute encoder) ---
 // One-wire half-duplex TTL bus on Serial1 (via Bus Servo Adapter: ESP TX17 ->
 // adapter RX, ESP RX18 <- adapter TX, common GND; servo power from the adapter
 // DC input). Position mode: 4096 ticks/turn, slot i = SLOT1_OFFSET + (i-1)*4096/6.
@@ -71,8 +74,8 @@
 #define STS_ACC           50     // acceleration ramp (0=instant, 1-254)
 #define STS_TOL           40     // arrival tolerance, ticks (~3.5 deg)
 #define STS_TIMEOUT_MS    4000   // give up waiting for arrival after this
-#else
-// --- revolver: MG90S 360 (continuous rotation) — open-loop timed stepping ---
+
+// --- revolver option B: MG90S 360 (continuous rotation) — open-loop fallback ---
 // Pulse width sets SPEED (1500us = stop). One compartment = spin at a fixed
 // slow speed for a calibrated time, then active-brake. The firmware tracks
 // currentSlot; align the carousel to slot 1 at power-on.
@@ -81,7 +84,6 @@
 #define REVOLVER_SPIN_US     1600   // slow forward; raise for faster/further per ms
 #define REVOLVER_MS_PER_SLOT 500    // CALIBRATE: time for one compartment (60 deg)
 #define REVOLVER_BRAKE_MS    150    // hold the stop pulse to brake before release
-#endif
 
 static int currentSlot = 0;   // tracks the revolver position to skip no-op rotations
 static NimBLECharacteristic *statusChar = nullptr;
@@ -169,7 +171,6 @@ static void pcaSetUs(int ch, int us) {          // raw pulse width — speed con
   pcaSetPwm(ch, 0, (int)(us / 20000.0 * 4096));
 }
 
-#if REVOLVER_USE_STS3215
 // --- Feetech STS3215 minimal driver (instruction packets on Serial1) ---
 // Frame: 0xFF 0xFF ID LEN INSTR PARAM... CHK, CHK = ~(ID+LEN+INSTR+sum(params)).
 // PING=1 READ=2 WRITE=3; 16-bit values little-endian (STS series); 1 Mbaud.
@@ -218,6 +219,13 @@ static bool stsReply(uint8_t *params, int want) {   // status frame: [FF FF ID L
     int n = stsFrame(f, sizeof(f), dl);
     if (n < 0) return false;
     if (n == stsTxLen && memcmp(f, stsTxBuf, n) == 0) continue;  // our own echo
+    // A corrupted self-echo slips past the exact-match filter above and used to
+    // count as a servo reply — with NOTHING on the bus the boot ping "succeeded",
+    // the firmware ran the STS revolver path and the real PWM servo on PCA ch8
+    // never moved. Only a frame with our servo's ID and a valid checksum is real;
+    // anything else is line noise — skip it and keep listening.
+    uint32_t sum = 0; for (int i = 2; i < n - 1; i++) sum += f[i];
+    if (f[2] != STS_ID || ((~sum) & 0xFF) != f[n - 1]) continue;  // mangled echo / noise
     for (int i = 0; i < want && 5 + i < n; i++) params[i] = f[5 + i];
     return true;
   }
@@ -249,7 +257,7 @@ static int stsPresentPos() {
 
 // Absolute move with arrival verification. Returns false if the servo doesn't
 // answer or never reaches the target (jam / power loss) — caller reports it.
-static bool moveRevolver(int slot) {
+static bool moveRevolverSts(int slot) {
   if (slot == currentSlot) return true;
   int target = (STS_SLOT1_OFFSET + (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS;
   Serial.printf("  revolver -> compartment %d (STS pos %d)\n", slot, target);
@@ -269,8 +277,7 @@ static bool moveRevolver(int slot) {
   Serial.println("  REVOLVER FAIL: target not reached (jammed? servo power?)");
   return false;
 }
-#else
-static bool moveRevolver(int slot) {
+static bool moveRevolverPwm(int slot) {
   if (slot == currentSlot) return true;         // already there
   // always step forward, wrapping (open-loop: backlash-free single direction)
   int steps = (slot - currentSlot + NUM_SLOTS) % NUM_SLOTS;
@@ -284,7 +291,11 @@ static bool moveRevolver(int slot) {
   currentSlot = slot;
   return true;
 }
-#endif
+
+// runtime dispatch: STS revolver if one answered at boot, PWM-360 otherwise
+static bool moveRevolver(int slot) {
+  return stsOk ? moveRevolverSts(slot) : moveRevolverPwm(slot);
+}
 static void sweeps(int n) {
   for (int i = 0; i < n; i++) {
     Serial.printf("  sweep %d/%d\n", i + 1, n);
@@ -385,18 +396,17 @@ void setup() {
     uint8_t acc = STS_ACC; stsWriteReg(41, &acc, 1);
     uint8_t spd[2] = { (uint8_t)(STS_SPEED & 0xFF), (uint8_t)(STS_SPEED >> 8) };
     stsWriteReg(46, spd, 2);                    // speed limit set once; moves are position-only
-    Serial.printf("STS3215: OK (present pos %d)\n", stsPresentPos());
+    Serial.printf("revolver mode: STS3215 closed-loop (present pos %d)\n", stsPresentPos());
     currentSlot = 0;                            // force the homing move
     if (!moveRevolver(1)) Serial.println("STS3215: homing move FAILED");
-  } else {
-    Serial.println("STS3215: NO REPLY - check bus wiring/servo power");
+  }
+#endif
+  if (!stsOk) {
+    // No STS detected: PWM-360 fallback on PCA ch8. Open-loop — no homing
+    // possible, boot position IS slot 1; align the carousel at power-on.
+    Serial.println("revolver mode: PWM-360 open-loop on PCA ch8 (align carousel to slot 1)");
   }
   currentSlot = 1;
-#else
-  // Revolver is open-loop (360 servo): no homing possible — boot position IS
-  // slot 1; align the carousel there at power-on.
-  currentSlot = 1;
-#endif
   Serial.printf("SpiceDispenser: servos homed (i2c errors so far: %lu)\n", (unsigned long)i2cErrs);
 
   NimBLEDevice::init(DEVICE_NAME);
