@@ -21,7 +21,9 @@ export const PERSONAS = [
   {
     id: "ramsay",
     name: "Chef Ramsay",
-    emoji: "🔥",
+    // 👨‍🍳 not 🔥 — the Hell's Kitchen toggle in the header is the flame, and
+    // with this persona active the two sat side by side as identical twins.
+    emoji: "👨‍🍳",
     blurb: "Fiery British chef energy",
     rtVoice: "ash",
     prompt:
