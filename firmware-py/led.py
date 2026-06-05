@@ -22,7 +22,9 @@ def _set(r, g, b):
     if _np is None:
         return
     try:
-        _np[0] = (r, g, b)
+        # This WS2812 expects Green-Red-Blue order, so swap R/G here — otherwise
+        # "green" shows up red. Callers keep using logical (r, g, b).
+        _np[0] = (g, r, b)
         _np.write()
     except Exception:
         pass

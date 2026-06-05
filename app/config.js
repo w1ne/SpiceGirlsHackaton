@@ -7,6 +7,9 @@
 // fallback when you set VITE_PROXY=0 and bake keys into .env.local.
 const SUPABASE_URL = "https://tlgtyskedenqffikfuzx.supabase.co";
 export const CONFIG = {
+  // App version — shown in Settings and bumped on every release. Keep in sync
+  // with package.json + the GitHub release tag (vX.Y.Z).
+  APP_VERSION: "1.1.0",
   SUPABASE_URL,
   // Route the brain + realtime token through edge functions unless explicitly off.
   PROXY: (import.meta.env.VITE_PROXY ?? "1") !== "0",

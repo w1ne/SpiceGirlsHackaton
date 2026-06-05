@@ -531,6 +531,7 @@ $("#saveInit").onclick = saveInit;
 // ---------- settings ----------
 function openSettings() {
   $("#diKey").value = LS.diKey; $("#ttsOn").checked = LS.tts; $("#voiceMode").value = LS.voiceMode;
+  $("#appVer").textContent = "v" + CONFIG.APP_VERSION;
   $("#settings").showModal();
 }
 $("#settingsBtn").onclick = openSettings;
