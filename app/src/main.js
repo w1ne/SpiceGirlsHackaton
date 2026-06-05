@@ -472,10 +472,16 @@ async function startRealtimeVoice() {
   const stale = () => voiceGate.gen !== myGen;
   try {
     const session = await voiceGate.start(async () => {
-      // Make sure the dispenser is connected BEFORE the conversation starts, so a
-      // dispense actually runs the motors instead of silently simulating.
-      if (!deviceId) { bubble("Connecting to the dispenser first…"); await connectBLE().catch(() => {}); }
-      if (!deviceId) bubble("⚠️ Dispenser not connected — I'll talk you through it but can't run the motors yet.");
+      // Kick the dispenser connection off IN PARALLEL — never await it. The BLE
+      // ladder (direct connect + scans) can take 40+ seconds when the dispenser
+      // is off, and the voice must greet in ~2s regardless. Dispensing is still
+      // safe: dispense() re-verifies the link (ensureLive) before running motors.
+      if (!deviceId) {
+        bubble("Connecting to the dispenser in the background…");
+        connectBLE().catch(() => {}).then(() => {
+          if (!deviceId && !stale()) bubble("⚠️ Dispenser not connected — I'll talk you through it but can't run the motors yet.");
+        });
+      }
       return startRealtime({
         instructions: systemPrompt(),
         voice: activePersona().rtVoice, // OpenAI preset for the active character

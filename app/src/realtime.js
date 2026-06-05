@@ -63,10 +63,16 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
           // "unknown parameter: session.turn_detection").
           audio: {
             input: {
-              // Higher threshold + longer silence so the mic only fires on clear,
-              // close speech aimed at the dispenser — not ambient kitchen chatter.
-              turn_detection: { type: "server_vad", threshold: 0.8, prefix_padding_ms: 300, silence_duration_ms: 900 },
-              transcription: { model: "whisper-1" },
+              // Semantic VAD instead of amplitude VAD: it ends the turn based on
+              // WHAT was said, not on how loud the room is — kitchen clatter stops
+              // triggering replies, and answers start as soon as the sentence
+              // sounds finished instead of after a fixed 900ms of silence.
+              turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: true, interrupt_response: true },
+              // The phone sits on the counter, not at the cook's mouth.
+              noise_reduction: { type: "far_field" },
+              // whisper-1 hallucinates words out of noise-triggered buffers ("words
+              // I never said" in the chat); the 4o transcriber is far less prone.
+              transcription: { model: "gpt-4o-mini-transcribe" },
             },
           },
         },

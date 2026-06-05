@@ -7,6 +7,15 @@ The running version is shown in the app under **Settings**.
 
 ## v1.1.1
 
+- **Voice starts instantly.** Tapping "Start talking" no longer waits for the
+  Bluetooth connect ladder (up to ~40 s when the dispenser is off) — the voice
+  session and the BLE connection now start in parallel, so the greeting lands
+  in a couple of seconds and dispensing still re-verifies the link first.
+- **Kitchen-proof hearing.** Switched to semantic turn detection (the model
+  ends your turn by what you said, not by room loudness), far-field noise
+  reduction for a counter-top phone, and a better transcriber — so clatter
+  stops triggering replies, transcripts stop inventing words, and answers
+  come faster after you finish a sentence.
 - **One voice, ever.** Fixed two voices talking at the same time: tapping Stop
   while the realtime session was still connecting left it running with no
   handle, and the next tap started a second one on top. A single voice-session
