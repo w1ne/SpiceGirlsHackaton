@@ -31,6 +31,8 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
   let pendingTool = false; // a tool ran this turn → ask for ONE follow-up at response.done
   // idle auto-stop: any speech/tool activity resets the timer; silence trips it.
   let idleTimer = null;
+  let unmuteTimer = null; // half-duplex: re-opens the mic shortly after bot audio ends
+  let audioStarted = false; // did the current response actually produce speaker audio?
   try {
     audioEl.autoplay = true;
     document.body.appendChild(audioEl);
@@ -43,6 +45,14 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+    // HALF-DUPLEX: Android's echo cancellation does NOT reliably cover the
+    // WebRTC playback path (the OS reroutes the output stream, breaking the AEC
+    // reference), so the open mic hears the bot's own speaker voice — it then
+    // interrupts itself, transcribes phantom "user" turns and even dispenses
+    // from them. Deterministic fix: mute the mic while bot audio is actually
+    // playing (output_audio_buffer.started/.stopped) + a short tail for the
+    // room to decay. Cost: no barge-in — fine for a spice dispenser.
+    const setMicEnabled = (on) => { try { mic.getTracks().forEach((t) => (t.enabled = on)); } catch {} };
 
     // 3) data channel for events + tool calls
     dc = pc.createDataChannel("oai-events");
@@ -102,8 +112,28 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
           pendingTool = true;
           break;
         }
+        case "response.created": // mute BEFORE any audio hits the speaker — muting on
+          // output_audio_buffer.started is ~100ms too late and the head of the bot's own
+          // voice leaks into the mic, spawning a phantom user turn
+          clearTimeout(unmuteTimer);
+          audioStarted = false;
+          setMicEnabled(false);
+          break;
+        case "output_audio_buffer.started": // bot audio is now on the speaker
+          clearTimeout(unmuteTimer);
+          audioStarted = true;
+          setMicEnabled(false);
+          break;
+        case "output_audio_buffer.stopped":
+        case "output_audio_buffer.cleared": // playback over → reopen the mic after the room decays
+          clearTimeout(unmuteTimer);
+          unmuteTimer = setTimeout(() => setMicEnabled(true), 300);
+          break;
         case "response.done":
           if (pendingTool) { pendingTool = false; send({ type: "response.create" }); }
+          // a response with NO audio never emits output_audio_buffer.stopped —
+          // make sure the mic doesn't stay muted forever
+          if (!audioStarted) { clearTimeout(unmuteTimer); unmuteTimer = setTimeout(() => setMicEnabled(true), 300); }
           break;
         case "error":
           log("err", "server: " + JSON.stringify(ev.error || ev)); break;
@@ -135,6 +165,7 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
   // hoisted so the idle timer and the setup catch above can call it
   function stop() {
     clearTimeout(idleTimer);
+    clearTimeout(unmuteTimer);
     try { if (mic) mic.getTracks().forEach((t) => t.stop()); } catch {}
     try { if (dc) dc.close(); } catch {}
     try { pc.close(); } catch {}

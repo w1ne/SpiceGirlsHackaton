@@ -11,6 +11,13 @@ The running version is shown in the app under **Settings**.
   Bluetooth connect ladder (up to ~40 s when the dispenser is off) — the voice
   session and the BLE connection now start in parallel, so the greeting lands
   in a couple of seconds and dispensing still re-verifies the link first.
+- **The bot no longer hears itself.** Android's echo cancellation doesn't
+  reliably cover the voice playback path, so the open mic picked up the bot's
+  own speaker voice — it interrupted itself mid-sentence, transcribed phantom
+  "user" turns and even dispensed spices nobody asked for. The mic now mutes
+  the instant a reply starts (before audio reaches the speaker) and reopens
+  shortly after it ends. Trade-off: you can't talk over the bot — wait for it
+  to finish.
 - **Kitchen-proof hearing.** Switched to semantic turn detection (the model
   ends your turn by what you said, not by room loudness), far-field noise
   reduction for a counter-top phone, and a better transcriber — so clatter
