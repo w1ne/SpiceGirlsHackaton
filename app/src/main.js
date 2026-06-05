@@ -6,6 +6,8 @@ import { CONFIG } from "../config.js";
 import { TOOL_DEFS, runTool, realtimeTools } from "./tools.js";
 import { startRealtime } from "./realtime.js";
 import { createVoiceGate } from "./voiceGate.js";
+import { createRoaster } from "./roast.js";
+import { RAMSAY_CLIPS } from "./ramsayClips.js";
 import { PERSONAS, DEFAULT_PERSONA_ID, getPersona, personaSystemPrompt } from "./personas.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
@@ -29,6 +31,9 @@ const LS = {
   // Active character persona (personality + voice).
   get persona() { return localStorage.getItem("persona") || DEFAULT_PERSONA_ID; },
   set persona(v) { localStorage.setItem("persona", v); },
+  // Hell's Kitchen mode: random real-Ramsay roasts while cooking.
+  get hellsKitchen() { return localStorage.getItem("hells_kitchen") === "1"; },
+  set hellsKitchen(v) { localStorage.setItem("hells_kitchen", v ? "1" : "0"); },
 };
 const activePersona = () => getPersona(LS.persona);
 
@@ -307,6 +312,7 @@ async function dispense(plan) {
     }
     await sleep(1200); // let the revolver+shutter finish one dose before the next
   }
+  roaster.dispenseJab(); // Gordon comments on your seasoning
 }
 
 // ---------- agent (DeepInfra + tool calling) ----------
@@ -516,6 +522,41 @@ micBtn.onclick = () => {
   return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
 };
 
+// ---------- Hell's Kitchen mode (real Ramsay roasts) ----------
+const roastAudio = new Audio();
+function playRamsayClip(clip) {
+  return new Promise((resolve, reject) => {
+    roastAudio.src = `ramsay/${clip.file}`;
+    roastAudio.onended = resolve;
+    roastAudio.onerror = () => reject(new Error("clip failed: " + clip.file));
+    roastAudio.play().catch(reject);
+  });
+}
+const roaster = createRoaster({
+  clips: RAMSAY_CLIPS,
+  playClip: playRamsayClip,
+  isSuppressed: () => voiceGate.active, // the AI must never hear Gordon
+  onRoast: (clip) => bubble(`🔥 ${clip.phrase}`),
+});
+async function setHellsKitchen(on) {
+  if (on) {
+    // Fresh clone without the clip pool: explain instead of failing silently.
+    const probe = await fetch(`ramsay/${RAMSAY_CLIPS[0].file}`, { method: "HEAD" }).catch(() => null);
+    if (!probe || !probe.ok) {
+      bubble("🔥 No Ramsay clips in this build — run tools/fetch-ramsay.sh and rebuild.");
+      return;
+    }
+    roaster.start();
+    bubble("🔥 Hell's Kitchen mode ON. Gordon is watching.");
+  } else {
+    roaster.stop();
+    bubble("Hell's Kitchen mode off. Gordon has left the kitchen. 🚪");
+  }
+  LS.hellsKitchen = on;
+  $("#roastBtn").classList.toggle("on", on);
+}
+$("#roastBtn").onclick = () => setHellsKitchen(!roaster.active);
+
 // Typed commands — a reliable input path that doesn't depend on speech
 // recognition. Runs the same agent turn (LLM + tools + device-TTS reply).
 $("#typeForm").addEventListener("submit", (e) => {
@@ -603,6 +644,7 @@ $("#personaBtn").onclick = openPersonas;
 // ---------- boot ----------
 (async function init() {
   syncPersonaChip();
+  if (LS.hellsKitchen) setHellsKitchen(true);
   bubble("Setting up… connecting to your dispenser 🎙️");
   await loadDevice(); await loadRecipes(); await loadPreferences();
   if (!Object.keys(slots).length) { bubble("First time? Set up your compartments 🧂"); openInit(); }

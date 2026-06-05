@@ -82,3 +82,7 @@ dialog input[type=text], dialog select { width: 100%; margin-top: 6px; padding: 
 .motor-grid button { background: var(--accent); color: #fff; display: flex; flex-direction: column; align-items: center; padding: 14px 6px; width: auto; }
 .motor-grid button small { color: #ffd9d9; font-size: 11px; }
 .motor-grid button:active { background: var(--accent2); color: #1a1212; }
+
+/* Hell's Kitchen toggle: dim ember when off, lit when Gordon is on duty */
+#roastBtn { opacity: 0.45; }
+#roastBtn.on { opacity: 1; text-shadow: 0 0 12px #ff5a1f; }
