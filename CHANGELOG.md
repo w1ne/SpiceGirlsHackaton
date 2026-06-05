@@ -5,7 +5,7 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
-## v1.2.1 (unreleased)
+## v1.2.1
 
 - **Hears you better in a loud kitchen.** Enables the platform's voice
   isolation where the WebView supports it, and the turn detector is now
