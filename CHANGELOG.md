@@ -5,6 +5,15 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.2.0
+
+- **Hell's Kitchen mode.** 🔥 toggle in the header: the dispenser plays real
+  Gordon Ramsay clips at random moments while you cook, plus a jab right
+  after each dispense. Pauses automatically during voice conversations so
+  the AI doesn't argue with Gordon. Clips aren't in the repo — run
+  `tools/fetch-ramsay.sh` before building (private assets repo first,
+  public soundboards as fallback).
+
 ## v1.1.1
 
 - **Voice starts instantly.** Tapping "Start talking" no longer waits for the
