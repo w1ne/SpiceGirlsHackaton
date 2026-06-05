@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<!-- SpiceDispenser bench console — Web Serial front-end for the firmware's
+     USB-serial JSON console (see "USB-serial control console" in main.cpp).
+     Self-contained: open this file in Chrome/Edge (Web Serial is Chromium-only),
+     click Connect, pick the "USB JTAG/serial debug unit". Only one program can
+     hold the port — close `pio device monitor` first. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SpiceDispenser serial console</title>
+<style>
+  :root { --bg:#14161a; --card:#1e2128; --line:#2c313a; --fg:#e8e8e8; --dim:#8b94a1;
+          --acc:#ff7043; --ok:#66bb6a; --err:#ef5350; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg);
+         font:14px/1.45 system-ui, sans-serif; }
+  h1 { font-size:18px; margin:0 0 12px; }  h1 .dot { color:var(--acc); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+             color:var(--dim); margin:0 0 10px; }
+  button { background:#2a2f38; color:var(--fg); border:1px solid var(--line);
+           border-radius:7px; padding:7px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--acc); }
+  button:disabled { opacity:.4; cursor:default; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#14161a; font-weight:600; }
+  input[type=number], input[type=text] { background:#12141a; color:var(--fg);
+    border:1px solid var(--line); border-radius:7px; padding:7px 9px; font:inherit; width:90px; }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+  .slots { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-family:ui-monospace,monospace; font-size:13px; }
+  .kv b { color:var(--dim); font-weight:400; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; }
+  .pill.on { background:#1b3320; color:var(--ok); }  .pill.off { background:#3a1f1f; color:var(--err); }
+  #log { height:230px; overflow-y:auto; background:#0e1013; border:1px solid var(--line);
+         border-radius:7px; padding:8px; font:12px ui-monospace,monospace; white-space:pre-wrap; }
+  #log .tx { color:#82b1ff; } #log .ok { color:var(--ok); } #log .err { color:var(--err); }
+  .wide { grid-column:1 / -1; }
+  .sw { width:30px; height:30px; border-radius:7px; border:1px solid var(--line); cursor:pointer; }
+</style>
+</head>
+<body>
+<h1>SpiceDispenser <span class="dot">●</span> serial console
+  <button id="connect" class="primary">Connect</button>
+  <span id="connState" class="pill off">disconnected</span>
+</h1>
+
+<div class="grid">
+  <div class="card">
+    <h2>Status <button id="probe" title="re-scan STS bus + PCA after hot-plugging">Probe HW</button>
+        <label style="font-weight:400"><input type="checkbox" id="poll" checked> auto-poll</label></h2>
+    <div class="kv" id="status">
+      <b>revolver mode</b><span id="s_mode">—</span>
+      <b>STS servo</b><span id="s_sts">—</span>
+      <b>STS encoder</b><span id="s_pos">—</span>
+      <b>current slot</b><span id="s_slot">—</span>
+      <b>PCA9685</b><span id="s_pca">—</span>
+      <b>I²C errors</b><span id="s_i2c">—</span>
+      <b>BLE phone</b><span id="s_ble">—</span>
+      <b>uptime</b><span id="s_up">—</span>
+      <b>firmware build</b><span id="s_build">—</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Revolver — dispense path</h2>
+    <div class="slots" id="slots"></div>
+    <div class="row">dose <input type="number" id="dose" value="1" min="1" max="9" style="width:60px">
+      <span style="color:var(--dim)">rotate + shutter, exactly like the app</span></div>
+    <h2 style="margin-top:14px">Revolver — raw STS position</h2>
+    <input type="range" id="stsSlider" min="0" max="4095" value="0">
+    <div class="row">
+      <input type="number" id="stsPos" min="0" max="4095" value="0">
+      <button id="stsGo">Go</button> <button id="stsRead">Read</button>
+      <span id="stsActual" style="color:var(--dim)">actual: —</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Shutter (PCA ch12)</h2>
+    <div class="row">
+      <button data-pca='{"cmd":"pca","ch":12,"deg":120}'>Open</button>
+      <button data-pca='{"cmd":"pca","ch":12,"deg":20}'>Close</button>
+      <button data-pca='{"cmd":"pca","ch":12,"off":true}'>Release</button>
+    </div>
+    <h2 style="margin-top:14px">Raw PCA channel</h2>
+    <div class="row">ch <input type="number" id="pcaCh" value="8" min="0" max="15" style="width:60px">
+      µs <input type="number" id="pcaUs" value="1500" min="500" max="2500">
+      <button id="pcaSet">Set</button> <button id="pcaOff">Off</button></div>
+    <h2 style="margin-top:14px">LED</h2>
+    <div class="row" id="leds"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Console — every serial line, send anything</h2>
+    <div id="log"></div>
+    <div class="row">
+      <input type="text" id="raw" placeholder='{"slot":3,"dose_units":1}' style="flex:1;width:auto">
+      <button id="send">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let port = null, writer = null, connected = false, wantConnected = false;
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+
+function log(line, cls) {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = line;
+  logEl.appendChild(d);
+  while (logEl.childElementCount > 500) logEl.firstChild.remove();
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Two transports. Served over http:// (the Python bridge) we use SSE + POST,
+// which works in any browser and sidesteps the S3's reset-on-open. Opened as a
+// file:// we fall back to Web Serial (Chrome/Edge only).
+const BRIDGE = location.protocol === 'http:' || location.protocol === 'https:';
+
+async function send(obj) {
+  const line = typeof obj === 'string' ? obj : JSON.stringify(obj);
+  if (BRIDGE) {
+    log('> ' + line, 'tx');
+    try { await fetch('/send', { method: 'POST', body: line }); }
+    catch (e) { log('send failed: ' + e.message, 'err'); }
+    return;
+  }
+  if (!connected) { log('not connected', 'err'); return; }
+  log('> ' + line, 'tx');
+  await writer.write(new TextEncoder().encode(line + '\n'));
+}
+
+function onLine(line) {
+  if (!line) return;
+  let j = null;
+  try { j = JSON.parse(line); } catch (e) {}
+  log(line, j ? (j.ok === false || j.status === 'error' || j.bridge === 'lost' ? 'err' : 'ok') : '');
+  if (!j) return;
+  if (j.bridge) return;   // bridge housekeeping (opened/lost/waiting)
+  if (j.cmd === 'status') {
+    $('s_mode').textContent = j.mode === 'sts' ? 'STS3215 closed-loop' : 'PWM-360 open-loop';
+    $('s_sts').innerHTML = j.stsOk ? '<span class="pill on">answering</span>' : '<span class="pill off">not found</span>';
+    $('s_pos').textContent = j.stsPos >= 0 ? `${j.stsPos} ticks (${(j.stsPos * 360 / 4096).toFixed(1)}°)` : '—';
+    $('s_slot').textContent = j.slot > 0 ? j.slot : 'unknown (raw move)';
+    $('s_pca').innerHTML = j.pcaAck ? '<span class="pill on">ack</span>' : '<span class="pill off">no ack — servo power?</span>';
+    $('s_i2c').textContent = j.i2cErrs;
+    $('s_ble').innerHTML = j.ble ? '<span class="pill on">connected</span>' : '<span class="pill off">—</span>';
+    $('s_up').textContent = (j.uptimeMs / 1000).toFixed(0) + ' s';
+    $('s_build').textContent = j.build;
+    if (j.stsPos >= 0) { $('stsSlider').value = j.stsPos; $('stsActual').textContent = 'actual: ' + j.stsPos; }
+  }
+  if (j.cmd === 'sts' && j.ok) {
+    $('stsActual').textContent = 'actual: ' + j.pos;
+    $('stsSlider').value = j.pos;
+  }
+}
+
+async function readLoop() {
+  const reader = port.readable.getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += new TextDecoder().decode(value);
+      let i;
+      while ((i = buf.search(/[\r\n]/)) >= 0) { onLine(buf.slice(0, i).trim()); buf = buf.slice(i + 1); }
+    }
+  } catch (e) { log('read error: ' + e.message, 'err'); }
+  finally {
+    try { reader.releaseLock(); } catch (e) {}
+    setConnected(false);
+    // The ESP32-S3's USB-Serial-JTAG resets + re-enumerates the first time the
+    // port is opened, so the very first connect always "loses" the device. Don't
+    // give up — re-acquire the already-granted port and reopen. After the reset
+    // the board stays up, so the second open is stable.
+    if (wantConnected) { log('device reset on open — reconnecting…', 'tx'); scheduleReconnect(); }
+  }
+}
+
+let reconnectTimer = null;
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => openGranted().catch(() => scheduleReconnect()), 1200);
+}
+async function openGranted() {
+  if (!wantConnected || connected) return;
+  const ports = await navigator.serial.getPorts();   // previously-granted, no dialog
+  if (!ports.length) { log('grant lost — click Connect again', 'err'); wantConnected = false; return; }
+  port = ports[ports.length - 1];
+  await port.open({ baudRate: 115200 });
+  writer = port.writable.getWriter();
+  setConnected(true);
+  readLoop();
+  send({ cmd: 'status' });
+}
+// Re-enumeration after the reset fires a 'connect' event — reopen immediately.
+navigator.serial && navigator.serial.addEventListener('connect', () => { if (wantConnected && !connected) openGranted().catch(() => {}); });
+
+function setConnected(on) {
+  connected = on;
+  $('connState').textContent = on ? 'connected' : 'disconnected';
+  $('connState').className = 'pill ' + (on ? 'on' : 'off');
+  $('connect').textContent = on ? 'Disconnect' : 'Connect';
+}
+
+let evtSrc = null;
+function connectBridge() {
+  if (connected) { wantConnected = false; setConnected(false); evtSrc && evtSrc.close(); evtSrc = null; return; }
+  wantConnected = true;
+  evtSrc = new EventSource('/events');
+  evtSrc.onopen = () => { setConnected(true); send({ cmd: 'status' }); };
+  evtSrc.onmessage = e => onLine(e.data);
+  evtSrc.onerror = () => { setConnected(false); };  // EventSource auto-reconnects
+}
+
+$('connect').onclick = async () => {
+  if (BRIDGE) { connectBridge(); return; }
+  if (connected || wantConnected) {                            // Disconnect
+    wantConnected = false; clearTimeout(reconnectTimer);
+    try { writer && await writer.close(); await port.close(); } catch (e) {}
+    setConnected(false); return;
+  }
+  if (!('serial' in navigator)) { log('Web Serial unsupported — use Chrome/Edge', 'err'); return; }
+  try {
+    let ports = await navigator.serial.getPorts();             // reuse an earlier grant
+    port = ports.length ? ports[ports.length - 1] : await navigator.serial.requestPort();
+    wantConnected = true;
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    setConnected(true);
+    readLoop();
+    send({ cmd: 'status' });
+  } catch (e) {
+    log('connect failed: ' + e.message, 'err');
+    if (wantConnected) scheduleReconnect();                    // reset-on-open during this attempt
+  }
+};
+
+// status auto-poll (skipped while a dispense might be running to keep logs clean)
+setInterval(() => { if (connected && $('poll').checked) send({ cmd: 'status' }); }, 2000);
+$('probe').onclick = () => send({ cmd: 'probe' });
+
+// revolver
+for (let s = 1; s <= 6; s++) {
+  const b = document.createElement('button');
+  b.textContent = s;
+  b.onclick = () => send({ slot: s, dose_units: +$('dose').value || 1 });
+  $('slots').appendChild(b);
+}
+$('stsSlider').oninput = () => $('stsPos').value = $('stsSlider').value;
+$('stsGo').onclick = () => send({ cmd: 'sts', pos: +$('stsPos').value });
+$('stsRead').onclick = () => send({ cmd: 'sts' });
+
+// shutter + raw PCA
+document.querySelectorAll('[data-pca]').forEach(b => b.onclick = () => send(b.dataset.pca));
+$('pcaSet').onclick = () => send({ cmd: 'pca', ch: +$('pcaCh').value, us: +$('pcaUs').value });
+$('pcaOff').onclick = () => send({ cmd: 'pca', ch: +$('pcaCh').value, off: true });
+
+// LED swatches
+[['#000000',0,0,0],['#ff3030',60,0,0],['#30ff30',0,60,0],['#3060ff',0,0,60],['#ffffff',60,60,60]]
+.forEach(([hex,r,g,b]) => {
+  const d = document.createElement('div');
+  d.className = 'sw'; d.style.background = hex; d.title = `led ${r},${g},${b}`;
+  d.onclick = () => send({ cmd: 'led', r, g, b });
+  $('leds').appendChild(d);
+});
+
+// raw input
+$('send').onclick = () => { if ($('raw').value.trim()) send($('raw').value.trim()); };
+$('raw').addEventListener('keydown', e => { if (e.key === 'Enter') $('send').onclick(); });
+</script>
+</body>
+</html>

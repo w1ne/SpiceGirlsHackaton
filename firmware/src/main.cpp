@@ -87,6 +87,7 @@
 
 static int currentSlot = 0;   // tracks the revolver position to skip no-op rotations
 static NimBLECharacteristic *statusChar = nullptr;
+static bool bleConnected = false;
 
 // --- onboard WS2812 status LED on GPIO21 (mirrors firmware-py/led.py) ---
 //   advertising -> blue, connected -> green, busy -> white, error -> red.
@@ -255,27 +256,46 @@ static int stsPresentPos() {
   return -1;
 }
 
-// Absolute move with arrival verification. Returns false if the servo doesn't
-// answer or never reaches the target (jam / power loss) — caller reports it.
-static bool moveRevolverSts(int slot) {
-  if (slot == currentSlot) return true;
-  int target = (STS_SLOT1_OFFSET + (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS;
-  Serial.printf("  revolver -> compartment %d (STS pos %d)\n", slot, target);
-  if (!stsOk) { Serial.println("  REVOLVER FAIL: STS3215 was not found at boot"); return false; }
+// Ping the bus and, if a servo answers, configure torque/acceleration/speed.
+// Used at boot and by the serial {"cmd":"probe"} command (hot-plugged servo).
+static bool stsProbe() {
+  stsOk = stsPing() || stsPing() || stsPing();  // a couple of retries on a fresh bus
+  if (stsOk) {
+    uint8_t one = 1; stsWriteReg(40, &one, 1);  // torque on
+    uint8_t acc = STS_ACC; stsWriteReg(41, &acc, 1);
+    uint8_t spd[2] = { (uint8_t)(STS_SPEED & 0xFF), (uint8_t)(STS_SPEED >> 8) };
+    stsWriteReg(46, spd, 2);                    // speed limit set once; moves are position-only
+  }
+  return stsOk;
+}
+// Raw absolute move with arrival verification against the encoder. Returns the
+// final position, or -1 if the servo doesn't answer / never arrives.
+static int stsGoto(int target) {
+  target = ((target % STS_TICKS) + STS_TICKS) % STS_TICKS;
   // position-only write: the marginal one-wire bus drops long frames, so speed
   // and acceleration are configured once at boot and each move is 2 bytes.
   uint8_t d[2] = { (uint8_t)(target & 0xFF), (uint8_t)(target >> 8) };
-  if (!stsWriteReg(42, d, 2)) { Serial.println("  REVOLVER FAIL: no reply from STS3215"); return false; }
+  if (!stsWriteReg(42, d, 2)) return -1;
   uint32_t t0 = millis();
   while (millis() - t0 < STS_TIMEOUT_MS) {
     delay(50);
     int cur = stsPresentPos();
     if (cur < 0) continue;
     int dd = abs(cur - target); if (dd > STS_TICKS / 2) dd = STS_TICKS - dd;
-    if (dd <= STS_TOL) { currentSlot = slot; return true; }
+    if (dd <= STS_TOL) return cur;
   }
-  Serial.println("  REVOLVER FAIL: target not reached (jammed? servo power?)");
-  return false;
+  return -1;
+}
+// Slot move on the STS revolver. Returns false if the servo doesn't answer or
+// never reaches the target (jam / power loss) — caller reports it.
+static bool moveRevolverSts(int slot) {
+  if (slot == currentSlot) return true;
+  int target = (STS_SLOT1_OFFSET + (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS;
+  Serial.printf("  revolver -> compartment %d (STS pos %d)\n", slot, target);
+  if (!stsOk) { Serial.println("  REVOLVER FAIL: STS3215 was not found at boot"); return false; }
+  if (stsGoto(target) < 0) { Serial.println("  REVOLVER FAIL: target not reached (jammed? servo power?)"); return false; }
+  currentSlot = slot;
+  return true;
 }
 static bool moveRevolverPwm(int slot) {
   if (slot == currentSlot) return true;         // already there
@@ -346,6 +366,93 @@ static void handle(const String &json) {
   if (ok) { notifyStatus("{\"status\":\"done\"}"); ledConnected(); }
 }
 
+// --- USB-serial control console -----------------------------------------------
+// JSON lines on Serial, same dialect as the BLE command characteristic, so any
+// terminal / script / Web-Serial page can drive the hardware without a phone:
+//   {"slot":3,"dose_units":1}        dispense (objects and arrays, like BLE)
+//   {"cmd":"status"}                 one-line JSON state report
+//   {"cmd":"probe"}                  re-scan STS bus + PCA (hot-plugged servo)
+//   {"cmd":"sts"} / {"cmd":"sts","pos":2048}   read / move the bus servo raw
+//   {"cmd":"pca","ch":8,"us":1600|"deg":90|"off":true}   raw PWM channel
+//   {"cmd":"led","r":0,"g":40,"b":0}            LED override
+// Replies are single-line JSON with an "ok" field; tools/serial-console.html is
+// the browser front-end.
+static void serialReply(bool ok, const char *fmt = nullptr, ...) {
+  char extra[256] = "";   // status report is ~165 chars; 160 truncated it (broken JSON)
+  if (fmt) { va_list ap; va_start(ap, fmt); vsnprintf(extra, sizeof(extra), fmt, ap); va_end(ap); }
+  Serial.printf("{\"ok\":%s%s%s}\n", ok ? "true" : "false", fmt ? "," : "", extra);
+}
+static void serialStatus() {
+  // live reads, not cached: encoder position and a fresh PCA ack probe
+  int pos = stsOk ? stsPresentPos() : -1;
+  Wire.beginTransmission(PCA9685_ADDR);
+  bool pcaAck = Wire.endTransmission() == 0;
+  serialReply(true,
+      "\"cmd\":\"status\",\"mode\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
+      "\"pcaAck\":%s,\"i2cErrs\":%lu,\"lastI2cRc\":%u,\"ble\":%s,\"uptimeMs\":%lu,"
+      "\"build\":\"" __DATE__ " " __TIME__ "\"",
+      stsOk ? "sts" : "pwm", stsOk ? "true" : "false", pos, currentSlot,
+      pcaAck ? "true" : "false", (unsigned long)i2cErrs, lastI2cRc,
+      bleConnected ? "true" : "false", (unsigned long)millis());
+}
+static void handleSerialLine(const String &line) {
+  JsonDocument doc;
+  if (deserializeJson(doc, line)) { serialReply(false, "\"msg\":\"bad json\""); return; }
+  if (!doc["cmd"].is<const char *>()) { handle(line); return; }  // dispense — exact BLE path
+  String cmd = doc["cmd"].as<const char *>();
+  if (cmd == "status") { serialStatus(); return; }
+  if (cmd == "probe") {
+    Wire.beginTransmission(PCA9685_ADDR);
+    bool pcaAck = Wire.endTransmission() == 0;
+    bool found = stsProbe();
+    serialReply(true, "\"cmd\":\"probe\",\"stsOk\":%s,\"pcaAck\":%s",
+                found ? "true" : "false", pcaAck ? "true" : "false");
+    return;
+  }
+  if (cmd == "sts") {
+    if (!stsOk) { serialReply(false, "\"msg\":\"no STS servo - try probe\""); return; }
+    if (doc["pos"].is<int>()) {
+      int got = stsGoto(doc["pos"].as<int>());
+      currentSlot = 0;                          // raw move desyncs the slot tracker
+      if (got < 0) serialReply(false, "\"msg\":\"target not reached (jam? power?)\"");
+      else serialReply(true, "\"cmd\":\"sts\",\"pos\":%d", got);
+    } else {
+      int pos = stsPresentPos();
+      if (pos < 0) serialReply(false, "\"msg\":\"no reply from STS3215\"");
+      else serialReply(true, "\"cmd\":\"sts\",\"pos\":%d", pos);
+    }
+    return;
+  }
+  if (cmd == "pca") {
+    int ch = doc["ch"] | -1;
+    if (ch < 0 || ch > 15) { serialReply(false, "\"msg\":\"ch must be 0-15\""); return; }
+    uint32_t errsBefore = i2cErrs;
+    if (doc["off"] | false)            pcaChannelOff(ch);
+    else if (doc["us"].is<int>())      pcaSetUs(ch, constrain(doc["us"].as<int>(), 500, 2500));
+    else if (doc["deg"].is<int>())     pcaSetAngle(ch, doc["deg"].as<int>());
+    else { serialReply(false, "\"msg\":\"need us, deg or off\""); return; }
+    if (ch == REVOLVER_CH) currentSlot = 0;     // raw spin desyncs the slot tracker
+    if (i2cErrs > errsBefore) serialReply(false, "\"msg\":\"PCA9685 NACK - servo rail powered?\"");
+    else serialReply(true, "\"cmd\":\"pca\",\"ch\":%d", ch);
+    return;
+  }
+  if (cmd == "led") {
+    ledSet(doc["r"] | 0, doc["g"] | 0, doc["b"] | 0);
+    serialReply(true, "\"cmd\":\"led\"");
+    return;
+  }
+  serialReply(false, "\"msg\":\"unknown cmd\"");
+}
+static void pollSerial() {
+  static String buf;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (buf.length()) { handleSerialLine(buf); buf = ""; }
+    } else if (buf.length() < 512) buf += c;
+  }
+}
+
 class CmdCB : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     std::string v = c->getValue();
@@ -353,8 +460,9 @@ class CmdCB : public NimBLECharacteristicCallbacks {
   }
 };
 class SrvCB : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { Serial.println("BLE: connected"); ledConnected(); }
+  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { bleConnected = true; Serial.println("BLE: connected"); ledConnected(); }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
+    bleConnected = false;
     Serial.println("BLE: disconnected, re-advertising"); ledAdvertising(); NimBLEDevice::startAdvertising();
   }
 };
@@ -390,12 +498,7 @@ void setup() {
 #else
   Serial1.begin(STS_BAUD, SERIAL_8N1, STS_RX, STS_TX);
 #endif
-  stsOk = stsPing() || stsPing() || stsPing();  // a couple of retries on a fresh bus
-  if (stsOk) {
-    uint8_t one = 1; stsWriteReg(40, &one, 1);  // torque on
-    uint8_t acc = STS_ACC; stsWriteReg(41, &acc, 1);
-    uint8_t spd[2] = { (uint8_t)(STS_SPEED & 0xFF), (uint8_t)(STS_SPEED >> 8) };
-    stsWriteReg(46, spd, 2);                    // speed limit set once; moves are position-only
+  if (stsProbe()) {
     Serial.printf("revolver mode: STS3215 closed-loop (present pos %d)\n", stsPresentPos());
     currentSlot = 0;                            // force the homing move
     if (!moveRevolver(1)) Serial.println("STS3215: homing move FAILED");
@@ -447,5 +550,6 @@ void loop() {
     portENTER_CRITICAL(&mux); j = cmdBuf; hasCmd = false; portEXIT_CRITICAL(&mux);
     handle(j);
   }
+  pollSerial();   // USB-serial control console (same JSON dialect as BLE)
   delay(20);
 }
