@@ -47,7 +47,9 @@ static NimBLECharacteristic *statusChar = nullptr;
 //   advertising -> blue, connected -> green, busy -> white, error -> red.
 // neopixelWrite is in the ESP32 core, so no extra dependency; best-effort.
 #define LED_PIN 21
-static inline void ledSet(uint8_t r, uint8_t g, uint8_t b) { neopixelWrite(LED_PIN, r, g, b); }
+// This board's WS2812 expects Green-Red-Blue order, so swap R/G here — otherwise
+// "green" shows up red (same fix as firmware-py/led.py). Callers use logical (r, g, b).
+static inline void ledSet(uint8_t r, uint8_t g, uint8_t b) { neopixelWrite(LED_PIN, g, r, b); }
 static inline void ledOff()         { ledSet(0, 0, 0); }
 static inline void ledAdvertising() { ledSet(0, 0, 40); }    // blue
 static inline void ledConnected()   { ledSet(0, 40, 0); }    // green
@@ -65,10 +67,16 @@ static void notifyStatus(const char *json) {
 }
 
 // --- PCA9685 minimal driver (ported register-for-register from pca9685.py) ---
+// Every write checks the I2C ack. If the servo rail (DC input) is unpowered the
+// PCA9685 NACKs everything — without this check the firmware "dispenses" happily
+// while nothing moves, and the app shows a fake done.
+static uint32_t i2cErrs = 0;   // failed transfers since boot
+static uint8_t  lastI2cRc = 0; // last non-zero Wire.endTransmission() code (2 = addr NACK)
 static void pcaWrite8(uint8_t reg, uint8_t val) {
   Wire.beginTransmission(PCA9685_ADDR);
   Wire.write(reg); Wire.write(val);
-  Wire.endTransmission();
+  uint8_t rc = Wire.endTransmission();
+  if (rc) { i2cErrs++; lastI2cRc = rc; }
 }
 static uint8_t pcaRead8(uint8_t reg) {
   Wire.beginTransmission(PCA9685_ADDR);
@@ -92,7 +100,8 @@ static void pcaSetPwm(int ch, int on, int off) {
   Wire.write(base);
   Wire.write(on & 0xFF); Wire.write((on >> 8) & 0x0F);
   Wire.write(off & 0xFF); Wire.write((off >> 8) & 0x0F);
-  Wire.endTransmission();
+  uint8_t rc = Wire.endTransmission();
+  if (rc) { i2cErrs++; lastI2cRc = rc; }
 }
 static void pcaSetAngle(int ch, int deg) {
   // 50 Hz -> 20 ms period (4096 ticks). Servo pulse 0.5..2.4 ms.
@@ -122,7 +131,15 @@ static bool stepCmd(int slot, int units) {
   char buf[48]; snprintf(buf, sizeof(buf), "{\"status\":\"running\",\"slot\":%d}", slot);
   notifyStatus(buf); ledBusy();
   if (slot < 1 || slot > 6) { notifyStatus("{\"status\":\"error\",\"msg\":\"unknown slot\"}"); ledError(); return false; }
+  uint32_t errsBefore = i2cErrs;
   moveRevolver(slot); sweeps(max(1, units));
+  // Servo writes NACKed → nothing physically moved. Say so instead of "done".
+  if (i2cErrs > errsBefore) {
+    Serial.printf("  I2C FAIL: %lu errors this step (last rc=%u) — servo rail powered?\n",
+                  (unsigned long)(i2cErrs - errsBefore), lastI2cRc);
+    notifyStatus("{\"status\":\"error\",\"msg\":\"servos not responding - check dispenser power\"}");
+    ledError(); return false;
+  }
   return true;
 }
 
@@ -163,12 +180,18 @@ void setup() {
   // Bring up the PCA9685 on I2C(0) and home the servos (mirrors Dispenser.init):
   // revolver to compartment 1, shutter closed, then let it settle.
   Wire.begin(I2C_SDA, I2C_SCL, I2C_FREQ);
+  // Probe the PCA9685 before homing — tells us at boot whether the servo driver
+  // is even alive (NO ACK here = servo rail / DC input has no power).
+  Wire.beginTransmission(PCA9685_ADDR);
+  uint8_t probe = Wire.endTransmission();
+  Serial.printf("PCA9685 probe @0x40: %s (rc=%u)\n",
+                probe == 0 ? "ACK" : "NO ACK - check servo/DC power", probe);
   pcaWrite8(PCA9685_MODE1, 0x00); delay(5);
   pcaSetFreq(50);
   pcaSetAngle(REVOLVER_CH, SLOT_ANGLES[1]);
   pcaSetAngle(SHUTTER_CH, SHUTTER_CLOSED);
   currentSlot = 1; delay(ROTATE_SETTLE_MS);
-  Serial.println("SpiceDispenser: servos homed");
+  Serial.printf("SpiceDispenser: servos homed (i2c errors so far: %lu)\n", (unsigned long)i2cErrs);
 
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEServer *server = NimBLEDevice::createServer();

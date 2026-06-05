@@ -8,7 +8,7 @@ import { preflight, json } from "../_shared/cors.ts";
 import { rateLimit } from "../_shared/ratelimit.ts";
 
 const OPENAI_KEY = Deno.env.get("OPENAI_KEY") ?? "";
-const REALTIME_MODEL = Deno.env.get("REALTIME_MODEL") ?? "gpt-realtime-mini";
+const REALTIME_MODEL = Deno.env.get("REALTIME_MODEL") ?? "gpt-realtime";
 const REALTIME_VOICE = Deno.env.get("REALTIME_VOICE") ?? "marin";
 
 Deno.serve(async (req) => {

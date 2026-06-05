@@ -1,7 +1,19 @@
 // OpenAI Realtime voice over WebRTC, wired to the dispenser tool surface.
 // Speech-to-speech: mic audio streams up, model audio plays back, and the model
 // can call tools (dispense, set_compartments, …) mid-conversation.
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { CONFIG } from "../config.js";
+
+// Native audio-session control (Android). Voice-call mode (MODE_IN_COMMUNICATION
+// + loudspeaker) engages the platform's hardware echo canceller — the same setup
+// ChatGPT voice and phone calls use. Without it the WebView's playback runs as
+// plain media and the AEC can't keep the bot's own speaker voice out of the open
+// mic: it interrupts itself, transcribes phantom turns and acts on them.
+const AudioMode = registerPlugin("AudioMode");
+async function setInCallAudio(on) {
+  if (!Capacitor.isNativePlatform()) return; // web dev: no-op
+  try { await AudioMode.setInCall({ on }); } catch (e) { console.warn("AudioMode:", e?.message || e); }
+}
 
 // log(kind, text): surface progress/errors on screen (we can't see a console on device)
 // idleMs: auto-stop the session after this long with no speech, so an always-on
@@ -31,28 +43,20 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
   let pendingTool = false; // a tool ran this turn → ask for ONE follow-up at response.done
   // idle auto-stop: any speech/tool activity resets the timer; silence trips it.
   let idleTimer = null;
-  let unmuteTimer = null; // half-duplex: re-opens the mic shortly after bot audio ends
-  let audioStarted = false; // did the current response actually produce speaker audio?
   try {
     audioEl.autoplay = true;
     document.body.appendChild(audioEl);
     pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; const p = audioEl.play(); if (p) p.catch(() => {}); };
     pc.onconnectionstatechange = () => log("status", "webrtc: " + pc.connectionState);
 
-    // Explicit echo cancellation so the open mic doesn't pick up the bot's own
-    // voice over the speaker and make it interrupt/talk over itself.
+    // Voice-call audio mode BEFORE opening the mic, so capture and playback both
+    // come up inside the communication session and the hardware AEC engages —
+    // full duplex, barge-in works, the bot never hears itself.
+    await setInCallAudio(true);
     mic = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
-    // HALF-DUPLEX: Android's echo cancellation does NOT reliably cover the
-    // WebRTC playback path (the OS reroutes the output stream, breaking the AEC
-    // reference), so the open mic hears the bot's own speaker voice — it then
-    // interrupts itself, transcribes phantom "user" turns and even dispenses
-    // from them. Deterministic fix: mute the mic while bot audio is actually
-    // playing (output_audio_buffer.started/.stopped) + a short tail for the
-    // room to decay. Cost: no barge-in — fine for a spice dispenser.
-    const setMicEnabled = (on) => { try { mic.getTracks().forEach((t) => (t.enabled = on)); } catch {} };
 
     // 3) data channel for events + tool calls
     dc = pc.createDataChannel("oai-events");
@@ -94,6 +98,9 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
     };
     dc.onmessage = async (e) => {
       let ev; try { ev = JSON.parse(e.data); } catch { return; }
+      // Keep the echo/VAD-critical events visible in logcat (Capacitor/Console) —
+      // speech_started while the bot is talking = echo leaking into the mic.
+      if (/speech_started|truncated|^error$/.test(ev.type)) console.log("[rt]", ev.type);
       switch (ev.type) {
         case "conversation.item.input_audio_transcription.completed":
           if (ev.transcript) { onUserText(ev.transcript.trim()); bumpIdle(); } break;
@@ -112,28 +119,8 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
           pendingTool = true;
           break;
         }
-        case "response.created": // mute BEFORE any audio hits the speaker — muting on
-          // output_audio_buffer.started is ~100ms too late and the head of the bot's own
-          // voice leaks into the mic, spawning a phantom user turn
-          clearTimeout(unmuteTimer);
-          audioStarted = false;
-          setMicEnabled(false);
-          break;
-        case "output_audio_buffer.started": // bot audio is now on the speaker
-          clearTimeout(unmuteTimer);
-          audioStarted = true;
-          setMicEnabled(false);
-          break;
-        case "output_audio_buffer.stopped":
-        case "output_audio_buffer.cleared": // playback over → reopen the mic after the room decays
-          clearTimeout(unmuteTimer);
-          unmuteTimer = setTimeout(() => setMicEnabled(true), 300);
-          break;
         case "response.done":
           if (pendingTool) { pendingTool = false; send({ type: "response.create" }); }
-          // a response with NO audio never emits output_audio_buffer.stopped —
-          // make sure the mic doesn't stay muted forever
-          if (!audioStarted) { clearTimeout(unmuteTimer); unmuteTimer = setTimeout(() => setMicEnabled(true), 300); }
           break;
         case "error":
           log("err", "server: " + JSON.stringify(ev.error || ev)); break;
@@ -144,10 +131,21 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
     log("status", "connecting…");
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const sdpRes = await fetch(`${CONFIG.OPENAI_BASE}/realtime/calls?model=${CONFIG.REALTIME_MODEL}`, {
-      method: "POST", body: offer.sdp,
-      headers: { Authorization: `Bearer ${EPH}`, "Content-Type": "application/sdp" },
-    });
+    // The ephemeral token is BOUND to the model the realtime-token edge function
+    // minted it for. If the deployed function still mints the old model, retry
+    // with it instead of dying — so a client/server model upgrade can roll out
+    // in either order. (Server truth: supabase/functions/realtime-token.)
+    let sdpRes;
+    for (const model of [CONFIG.REALTIME_MODEL, "gpt-realtime-mini"]) {
+      sdpRes = await fetch(`${CONFIG.OPENAI_BASE}/realtime/calls?model=${model}`, {
+        method: "POST", body: offer.sdp,
+        headers: { Authorization: `Bearer ${EPH}`, "Content-Type": "application/sdp" },
+      });
+      if (sdpRes.ok || sdpRes.status !== 400) break;
+      const errText = await sdpRes.clone().text();
+      if (!/token model/i.test(errText)) break;
+      log("status", `server mints ${model === CONFIG.REALTIME_MODEL ? "a different model — falling back" : "?"}`);
+    }
     if (!sdpRes.ok) throw new Error(`sdp ${sdpRes.status}: ${(await sdpRes.text()).slice(0, 140)}`);
     // CapacitorHttp's native layer can hand back the SDP with stripped/mixed line
     // endings; Chromium's parser then rejects it ("Invalid SDP line"). Force CRLF.
@@ -165,10 +163,10 @@ export async function startRealtime({ instructions, tools, voice, onToolCall, on
   // hoisted so the idle timer and the setup catch above can call it
   function stop() {
     clearTimeout(idleTimer);
-    clearTimeout(unmuteTimer);
     try { if (mic) mic.getTracks().forEach((t) => t.stop()); } catch {}
     try { if (dc) dc.close(); } catch {}
     try { pc.close(); } catch {}
     try { audioEl.remove(); } catch {}
+    setInCallAudio(false); // back to normal media routing
   }
 }

@@ -11,13 +11,18 @@ The running version is shown in the app under **Settings**.
   Bluetooth connect ladder (up to ~40 s when the dispenser is off) — the voice
   session and the BLE connection now start in parallel, so the greeting lands
   in a couple of seconds and dispensing still re-verifies the link first.
-- **The bot no longer hears itself.** Android's echo cancellation doesn't
-  reliably cover the voice playback path, so the open mic picked up the bot's
-  own speaker voice — it interrupted itself mid-sentence, transcribed phantom
-  "user" turns and even dispensed spices nobody asked for. The mic now mutes
-  the instant a reply starts (before audio reaches the speaker) and reopens
-  shortly after it ends. Trade-off: you can't talk over the bot — wait for it
-  to finish.
+- **Full-duplex voice, like a phone call.** The voice session now runs in
+  Android's voice-communication audio mode (native plugin), engaging the
+  hardware echo canceller — the bot no longer hears its own speaker voice, you
+  can talk over it to interrupt (barge-in), and no muting tricks are needed.
+  Previously the open mic picked up the bot's own audio: it interrupted itself
+  mid-sentence, transcribed phantom "user" turns and even dispensed from them.
+- **No more fake "done".** Upgraded the voice brain to the full realtime model:
+  the mini model intermittently *said* "spices dispensed — done" without ever
+  calling the dispense tool, so nothing reached the motors. The firmware now
+  also verifies every servo command on the I2C bus and reports "servos not
+  responding — check dispenser power" instead of pretending success when the
+  servo rail is unpowered.
 - **Kitchen-proof hearing.** Switched to semantic turn detection (the model
   ends your turn by what you said, not by room loudness), far-field noise
   reduction for a counter-top phone, and a better transcriber — so clatter

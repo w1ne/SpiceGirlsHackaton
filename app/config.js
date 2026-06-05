@@ -31,7 +31,10 @@ export const CONFIG = {
   // ever ships in the app. OPENAI_BASE is only the public realtime endpoint used
   // for the WebRTC SDP exchange (the ephemeral token comes from the edge fn).
   OPENAI_BASE: "https://api.openai.com/v1",
-  REALTIME_MODEL: "gpt-realtime-mini",
+  // Full gpt-realtime, not -mini: the mini model intermittently SAYS "done"
+  // without ever calling the dispense tool (nothing reaches the motors) and
+  // acts on overheard conversation. Tool discipline is the product here.
+  REALTIME_MODEL: "gpt-realtime",
   REALTIME_VOICE: "marin",
   // Local-dev-only direct LLM fallback (VITE_PROXY=0). The key is NEVER baked —
   // a developer types it into Settings, where it stays in their browser only.
