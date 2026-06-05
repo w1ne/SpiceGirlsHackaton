@@ -37,22 +37,18 @@ public class AudioModePlugin extends Plugin {
     private void setSpeaker(AudioManager am, boolean on) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (on) {
-                // Prefer a headset when one is connected — its mic sits at the
-                // cook's mouth, which beats any noise suppression the counter-top
-                // mic can do. Otherwise fall back to the loudspeaker.
-                AudioDeviceInfo speaker = null, headset = null;
+                // ALWAYS the loudspeaker. Auto-preferring a "headset" comm device
+                // looked clever but misfires: any paired watch/buds (even idle in
+                // their case) registers as one, audio routes there, SCO fails to
+                // come up, and Android falls back to the EARPIECE — the cook hears
+                // a whisper from the wrong speaker. The phone lives on the counter;
+                // loudspeaker is the product. (Revisit only as an explicit setting.)
                 for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
-                    int t = d.getType();
-                    if (t == AudioDeviceInfo.TYPE_WIRED_HEADSET
-                            || t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                            || t == AudioDeviceInfo.TYPE_BLE_HEADSET) {
-                        if (headset == null) headset = d;
-                    } else if (t == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
-                        speaker = d;
+                    if (d.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                        am.setCommunicationDevice(d);
+                        break;
                     }
                 }
-                AudioDeviceInfo pick = headset != null ? headset : speaker;
-                if (pick != null) am.setCommunicationDevice(pick);
             } else {
                 am.clearCommunicationDevice();
             }

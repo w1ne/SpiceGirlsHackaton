@@ -8,11 +8,12 @@ The running version is shown in the app under **Settings**.
 ## v1.2.1 (unreleased)
 
 - **Hears you better in a loud kitchen.** Enables the platform's voice
-  isolation where the WebView supports it, prefers a connected headset's
-  mic over the counter-top phone mic (wired or Bluetooth — its mic is at
-  your mouth), and the turn detector is now patient with slow, thinking
-  speech ("two pinches of… ehm…") instead of cutting the phrase at the
-  pause. Replies start a beat later in exchange.
+  isolation where the WebView supports it, and the turn detector is now
+  patient with slow, thinking speech ("two pinches of… ehm…") instead of
+  cutting the phrase at the pause. Replies start a beat later in exchange.
+- **Always the loudspeaker.** Voice sessions pin playback to the built-in
+  loudspeaker — a paired watch/earbuds could silently steal the audio
+  route and leave the voice whispering out of the earpiece.
 
 ## v1.2.0
 
