@@ -39,9 +39,9 @@ jobs:
         # Byte-identical to the image flashed to the bench board:
         # bootloader @0x0, partitions @0x8000, boot_app0 @0xE000, app @0x10000.
         run: |
-          ~/.platformio/penv/bin/python -m pip install --quiet esptool
+          pipx install esptool==4.8.1
           b=firmware/.pio/build/esp32-s3
-          ~/.platformio/penv/bin/python -m esptool --chip esp32s3 merge_bin \
+          esptool.py --chip esp32s3 merge_bin \
             -o $b/firmware.factory.bin \
             --flash_mode dio --flash_freq 80m --flash_size 4MB \
             0x0 $b/bootloader.bin \
