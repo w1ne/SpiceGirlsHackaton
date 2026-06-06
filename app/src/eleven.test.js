@@ -4,7 +4,7 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // be created in vi.hoisted (which is hoisted too). CONFIG is mutable so tests can
 // tweak the creds; startSession captures what we hand the SDK.
 const { CONFIG, startSession } = vi.hoisted(() => ({
-  CONFIG: { ELEVEN_BASE: "https://api.elevenlabs.io", ELEVEN_AGENT_ID: "agent_x", ELEVEN_KEY: "xi-key" },
+  CONFIG: { FN_BASE: "https://proj.supabase.co/functions/v1", SUPABASE_ANON_KEY: "anon-123" },
   startSession: vi.fn(),
 }));
 vi.mock("../config.js", () => ({ CONFIG }));
@@ -34,23 +34,17 @@ function base(over = {}) {
 }
 
 beforeEach(() => {
-  CONFIG.ELEVEN_AGENT_ID = "agent_x"; CONFIG.ELEVEN_KEY = "xi-key";
   startSession.mockReset(); startSession.lastOpts = undefined;
   startSession.mockImplementation(async (opts) => { startSession.lastOpts = opts; return { endSession: vi.fn() }; });
   global.fetch = okFetch();
 });
 
 describe("startEleven", () => {
-  test("refuses to start without a key + agent id", async () => {
-    CONFIG.ELEVEN_KEY = "";
-    await expect(startEleven(base())).rejects.toThrow(/Settings/i);
-    expect(global.fetch).not.toHaveBeenCalled();
-  });
-
-  test("mints a signed URL with the key, then opens the session with it", async () => {
+  test("mints the signed URL via the Supabase edge function, then opens the session with it", async () => {
     await startEleven(base());
-    expect(okFetch.lastUrl).toContain("/v1/convai/conversation/get-signed-url?agent_id=agent_x");
-    expect(okFetch.lastInit.headers["xi-api-key"]).toBe("xi-key");
+    expect(okFetch.lastUrl).toBe("https://proj.supabase.co/functions/v1/eleven-signed-url");
+    expect(okFetch.lastInit.method).toBe("POST");
+    expect(okFetch.lastInit.headers.Authorization).toBe("Bearer anon-123");
     expect(startSession.lastOpts.signedUrl).toBe("wss://convai/abc");
   });
 

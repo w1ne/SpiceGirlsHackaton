@@ -4,10 +4,9 @@
 // turn-taking; we own the tool implementations, the persona prompt override, and
 // the Android audio-session trick.
 //
-// Credentials live ONLY in the browser (Settings → localStorage), never baked
-// into a build: the local xi-api-key mints a short-lived signed URL for the
-// (private) agent, and the SDK connects to that. On device, Capacitor's native
-// fetch bypasses CORS; in web dev the agent must allow the origin or be public.
+// No ElevenLabs secret ships in the app: the eleven-signed-url Supabase edge
+// function holds the xi-api-key + agent id server-side (same as realtime-token),
+// mints a short-lived signed URL, and the SDK connects to that.
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Conversation } from "@elevenlabs/client";
 import { CONFIG } from "../config.js";
@@ -21,11 +20,14 @@ async function setInCallAudio(on) {
   try { await AudioMode.setInCall({ on }); } catch (e) { console.warn("AudioMode:", e?.message || e); }
 }
 
-// Mint a signed conversation URL for a private agent using the local key. One GET;
-// the key never leaves the device and the URL it returns is short-lived.
-async function signedUrl(agentId, apiKey) {
-  const url = `${CONFIG.ELEVEN_BASE}/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`;
-  const res = await fetch(url, { headers: { "xi-api-key": apiKey } });
+// Mint a signed conversation URL via the Supabase edge function (it holds the
+// ElevenLabs key + agent id server-side). Authorized with the public anon key,
+// exactly like the realtime-token call.
+async function signedUrl() {
+  const res = await fetch(`${CONFIG.FN_BASE}/eleven-signed-url`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`, "Content-Type": "application/json" },
+  });
   if (!res.ok) throw new Error(`signed-url ${res.status}: ${(await res.text()).slice(0, 140)}`);
   const body = await res.json();
   if (!body.signed_url) throw new Error("signed-url: no signed_url in response");
@@ -38,12 +40,8 @@ async function signedUrl(agentId, apiKey) {
 //   toolNames    : names of the agent's client tools to route to onToolCall
 //   idleMs       : auto-stop after this long with no activity (0 disables)
 export async function startEleven({ instructions, firstMessage, toolNames = [], onToolCall, onUserText, onBotText, log, onIdle, idleMs = 90_000 }) {
-  const agentId = (CONFIG.ELEVEN_AGENT_ID || "").trim();
-  const apiKey = (CONFIG.ELEVEN_KEY || "").trim();
-  if (!agentId || !apiKey) throw new Error("add your ElevenLabs key + agent id in Settings");
-
   log("status", "minting signed url…");
-  const url = await signedUrl(agentId, apiKey);
+  const url = await signedUrl();
 
   // Route every client-tool call straight into the shared dispenser tools. The
   // SDK only emits a call for a tool the agent declares (see setup-eleven-agent),

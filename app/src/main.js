@@ -25,12 +25,6 @@ const LS = {
   // or "classic" (turn-based STT→LLM→TTS)
   get voiceMode() { return localStorage.getItem("voice_mode") || "realtime"; },
   set voiceMode(v) { localStorage.setItem("voice_mode", v); },
-  // ElevenLabs credentials — stored only in the browser, read back via CONFIG
-  // (config.js ELEVEN_KEY / ELEVEN_AGENT_ID getters use these same keys).
-  get elKey() { return localStorage.getItem("el_key") || ""; },
-  set elKey(v) { v ? localStorage.setItem("el_key", v) : localStorage.removeItem("el_key"); },
-  get elAgent() { return localStorage.getItem("el_agent") || ""; },
-  set elAgent(v) { v ? localStorage.setItem("el_agent", v) : localStorage.removeItem("el_agent"); },
   // Last dispenser we connected to (Android deviceId == MAC). Lets us reconnect
   // WITHOUT scanning — Android throttles an app to zero results after a few
   // scans, so skipping the scan is what makes reconnect reliable.
@@ -530,9 +524,7 @@ function stopRealtimeVoice() {
 // taking; we supply the persona prompt + the dispenser tool implementations.
 async function startElevenVoice() {
   if (voiceGate.active) return;
-  if (!CONFIG.ELEVEN_KEY || !CONFIG.ELEVEN_AGENT_ID) {
-    openSettings(); status("add your ElevenLabs key + agent id", "err"); return;
-  }
+  if (!CONFIG.PROXY) { status("eleven needs proxy mode (edge functions)", "err"); return; }
   micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
   const myGen = voiceGate.gen;
   const stale = () => voiceGate.gen !== myGen;
@@ -658,14 +650,12 @@ $("#saveInit").onclick = saveInit;
 // ---------- settings ----------
 function openSettings() {
   $("#diKey").value = LS.diKey; $("#ttsOn").checked = LS.tts; $("#voiceMode").value = LS.voiceMode;
-  $("#elKey").value = LS.elKey; $("#elAgent").value = LS.elAgent;
   $("#appVer").textContent = "v" + CONFIG.APP_VERSION;
   $("#settings").showModal();
 }
 $("#settingsBtn").onclick = openSettings;
 $("#saveSettings").onclick = () => {
   LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value;
-  LS.elKey = $("#elKey").value.trim(); LS.elAgent = $("#elAgent").value.trim();
 };
 
 // ---------- persona picker ----------

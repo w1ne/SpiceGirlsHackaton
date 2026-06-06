@@ -9,8 +9,10 @@
 //   ELEVENLABS_API_KEY=xi-... node tools/setup-eleven-agent.mjs
 //   ELEVENLABS_API_KEY=xi-... node tools/setup-eleven-agent.mjs --update agent_123
 //
-// On success it prints the agent id — paste that, and the same key, into the
-// app's Settings (ElevenLabs agent id / ElevenLabs API key).
+// On success it prints the agent id. The runtime key + agent id live SERVER-SIDE
+// in the eleven-signed-url edge function, so register them as Supabase secrets:
+//   supabase secrets set ELEVENLABS_KEY=xi-... ELEVEN_AGENT_ID=<printed id>
+//   supabase functions deploy eleven-signed-url
 import { TOOL_DEFS } from "../app/src/tools.js";
 
 const KEY = process.env.ELEVENLABS_API_KEY || "";
@@ -20,14 +22,30 @@ const BASE = "https://api.elevenlabs.io";
 const updateIdx = process.argv.indexOf("--update");
 const updateId = updateIdx >= 0 ? process.argv[updateIdx + 1] : null;
 
-// The dispenser tools, as ElevenLabs client tools. We reuse the exact JSON-Schema
-// parameters from TOOL_DEFS; expects_response=true so the agent waits for the
-// phone's result (e.g. "dispensed" / "blocked: allergen") before it speaks.
+// ElevenLabs' tool-parameter dialect is JSON-Schema-like but requires a
+// `description` on EVERY property node (including nested array items / object
+// props), or it 422s. Deep-annotate the TOOL_DEFS schema, defaulting any missing
+// description to the property name so we don't have to hand-maintain a second copy.
+function annotate(node, hint) {
+  if (!node || typeof node !== "object") return node;
+  const out = { ...node };
+  if (out.type && !out.description && hint) out.description = hint;
+  if (out.type === "object" && out.properties) {
+    out.properties = Object.fromEntries(
+      Object.entries(out.properties).map(([k, v]) => [k, annotate(v, v.description || k)]),
+    );
+  }
+  if (out.type === "array" && out.items) out.items = annotate(out.items, (hint || "item") + " entry");
+  return out;
+}
+
+// The dispenser tools, as ElevenLabs client tools. expects_response=true so the
+// agent waits for the phone's result (e.g. "dispensed" / "blocked: allergen").
 const tools = TOOL_DEFS.map((t) => ({
   type: "client",
   name: t.function.name,
   description: t.function.description,
-  parameters: t.function.parameters,
+  parameters: annotate(t.function.parameters, t.function.name + " parameters"),
   expects_response: true,
   response_timeout_secs: 15,
 }));
@@ -80,7 +98,7 @@ let agentId = updateId;
 try { agentId = JSON.parse(text).agent_id || updateId; } catch {}
 console.log(`✅ agent ${updateId ? "updated" : "created"}: ${agentId}`);
 console.log(`   tools declared: ${tools.map((t) => t.name).join(", ")}`);
-console.log(`\nPaste into the app → Settings:`);
-console.log(`   ElevenLabs agent id : ${agentId}`);
-console.log(`   ElevenLabs API key  : (the same xi-api-key you used here)`);
-console.log(`Then pick "Natural — ElevenLabs voice" as the voice mode.`);
+console.log(`\nRegister server-side, then deploy:`);
+console.log(`   supabase secrets set ELEVENLABS_KEY=<the xi-api-key> ELEVEN_AGENT_ID=${agentId}`);
+console.log(`   supabase functions deploy eleven-signed-url`);
+console.log(`Then pick "Natural — ElevenLabs voice" in the app — no app config needed.`);

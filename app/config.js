@@ -13,7 +13,9 @@ export const CONFIG = {
   SUPABASE_URL,
   // Route the brain + realtime token through edge functions unless explicitly off.
   PROXY: (import.meta.env.VITE_PROXY ?? "1") !== "0",
-  FN_BASE: `${SUPABASE_URL}/functions/v1`,
+  // Edge-function base. Defaults to the hosted project; override with
+  // VITE_FN_BASE (e.g. a locally-served function) for local end-to-end testing.
+  FN_BASE: import.meta.env.VITE_FN_BASE || `${SUPABASE_URL}/functions/v1`,
   SUPABASE_ANON_KEY:
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsZ3R5c2tlZGVucWZmaWtmdXp4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1NTg4NDMsImV4cCI6MjA5NjEzNDg0M30.Pkb2WU2Mh7U3gbseRZPQ_B56Lt6VA_rY8oUR3FQetLY",
   DEVICE_ID: "dispenser-01",
@@ -36,20 +38,10 @@ export const CONFIG = {
   // acts on overheard conversation. Tool discipline is the product here.
   REALTIME_MODEL: "gpt-realtime",
   REALTIME_VOICE: "marin",
-  // ElevenLabs Conversational AI — a selectable voice provider (see eleven.js).
-  // To keep it simple, BOTH the key and the agent id are entered in Settings and
-  // stored only in the browser (localStorage) — nothing is baked into a build.
-  // VITE_ELEVEN_* seed them for local dev. ELEVEN_BASE is the public REST host
-  // used once per session to mint a short-lived signed conversation URL.
-  ELEVEN_BASE: "https://api.elevenlabs.io",
-  get ELEVEN_AGENT_ID() {
-    try { return localStorage.getItem("el_agent") || import.meta.env.VITE_ELEVEN_AGENT_ID || ""; }
-    catch { return import.meta.env.VITE_ELEVEN_AGENT_ID || ""; }
-  },
-  get ELEVEN_KEY() {
-    try { return localStorage.getItem("el_key") || import.meta.env.VITE_ELEVEN_KEY || ""; }
-    catch { return import.meta.env.VITE_ELEVEN_KEY || ""; }
-  },
+  // ElevenLabs Conversational AI is a selectable voice provider (see eleven.js).
+  // Like the OpenAI path, its key + agent id live SERVER-SIDE in the
+  // eleven-signed-url edge function — nothing ElevenLabs ships in the app, so
+  // there's no client config here.
   // Local-dev-only direct LLM fallback (VITE_PROXY=0). The key is NEVER baked —
   // a developer types it into Settings, where it stays in their browser only.
   DEEPINFRA_BASE: "https://api.deepinfra.com/v1/openai",

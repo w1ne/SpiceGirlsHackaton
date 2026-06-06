@@ -36,3 +36,4 @@ app/public/ramsay/
 
 # on-board flash backups (tools/*.bin dumps)
 board-flash-backup-*.bin
+supabase/functions/.env.local
