@@ -1,0 +1,82 @@
+name: firmware-sim-gate
+
+# Boots the built firmware on the faithful labwired ESP32-S3 model (real boot
+# ROM, dual-core, I2C/PCA9685 twin) and asserts the boot + dispense path —
+# no hardware in the loop. Gate logic lives in tools/sim_gate.sh so it runs
+# identically on a dev machine.
+
+on:
+  push:
+    branches: [main]
+    paths: ['firmware/**', 'tools/sim_gate.sh', '.github/workflows/firmware-sim-gate.yml']
+  pull_request:
+    paths: ['firmware/**', 'tools/sim_gate.sh', '.github/workflows/firmware-sim-gate.yml']
+
+env:
+  # Pinned labwired-core revision (post PR #178: faithful SYSTEM/I2C/SPI/
+  # MCPWM/LEDC/SENS + deterministic bus routing). Bump deliberately.
+  LABWIRED_REV: 02336ca5b182cf4c35f44a58cbdffbc78696f7bd
+
+jobs:
+  sim-boot-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Firmware build (PlatformIO) ──────────────────────────────────────
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - name: Install PlatformIO
+        run: pipx install platformio
+      - name: Build firmware (esp32-s3)
+        run: pio run -e esp32-s3 -d firmware
+      - name: Merge factory image
+        # Byte-identical to the image flashed to the bench board:
+        # bootloader @0x0, partitions @0x8000, boot_app0 @0xE000, app @0x10000.
+        run: |
+          ~/.platformio/penv/bin/python -m pip install --quiet esptool
+          b=firmware/.pio/build/esp32-s3
+          ~/.platformio/penv/bin/python -m esptool --chip esp32s3 merge_bin \
+            -o $b/firmware.factory.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            0x0 $b/bootloader.bin \
+            0x8000 $b/partitions.bin \
+            0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+            0x10000 $b/firmware.bin
+      - name: Provision ESP32-S3 boot ROM ELF
+        # labwired auto-extracts the real boot ROM from the toolchain's ROM ELF.
+        run: |
+          pio pkg install -g -t "platformio/tool-esp-rom-elfs" || true
+          elf=$(find ~/.platformio -name 'esp32s3_rev0_rom.elf' | head -1)
+          [ -n "$elf" ] || { echo "esp32s3 ROM ELF not found"; exit 1; }
+          echo "LABWIRED_ESP32S3_ROM_ELF=$elf" >> "$GITHUB_ENV"
+
+      # ── Simulator build (labwired) ───────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          repository: w1ne/labwired-core
+          ref: ${{ env.LABWIRED_REV }}
+          path: labwired-core
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: labwired-core
+      - name: Build labwired-cli
+        run: cargo build --release -p labwired-cli
+        working-directory: labwired-core
+
+      # ── The gate ─────────────────────────────────────────────────────────
+      - name: Rom-boot + dispense-path gate
+        run: SIM_GATE_LOG=$PWD/sim-gate.log tools/sim_gate.sh "$PWD/labwired-core"
+      - name: Upload simulation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-gate-log
+          path: sim-gate.log
+          if-no-files-found: ignore
