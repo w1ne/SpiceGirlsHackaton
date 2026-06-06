@@ -5,6 +5,13 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.4.1
+
+- **Settings gear always reachable.** On small screens (or large system font
+  sizes) the header buttons overflowed and pushed ⚙️ Settings off-screen; the
+  header now wraps onto a second row and compacts itself on narrow displays.
+  (App only — no firmware change.)
+
 ## v1.4.0
 
 - **Calibrate from the app.** **Settings → 🛠 Calibration & test** brings the
