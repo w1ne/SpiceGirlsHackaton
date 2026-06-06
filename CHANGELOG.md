@@ -5,6 +5,13 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.3.1
+
+- **Unpair a dispenser.** A new "Unpair dispenser" button in **Settings** forgets
+  the currently paired board so you can connect a different one — previously the
+  app stuck to the first dispenser it paired with, which got in the way when you
+  have several units. (App only — no firmware change.)
+
 ## v1.3.0
 
 - **ElevenLabs voice.** A new voice option in **Settings** — talk to the
