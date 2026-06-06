@@ -13,6 +13,7 @@
 #include <Wire.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include "esp_mac.h"
 #include "driver/gpio.h"
 #include "esp_rom_gpio.h"
 #include "soc/uart_periph.h"
@@ -130,6 +131,20 @@ static void calSave() {
   calPrefs.putInt("shopen", calShutterOpen);
   calPrefs.putInt("shcls",  calShutterClose);
   calPrefs.end();
+}
+
+// Per-board identity from the Bluetooth MAC, so several prototypes don't
+// collide: each advertises a UNIQUE name "SpiceGirls-XXXX" (the phone matches on
+// the "SpiceGirls" prefix, then pins this exact unit) and reports XXXX so the app
+// can key its cloud state per unit. Derived once in setup() before BLE comes up.
+static char gDevName[24] = DEVICE_NAME;
+static char gDevId[8] = "";
+static void deriveIdentity() {
+  uint8_t mac[6];
+  if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) {
+    snprintf(gDevId, sizeof(gDevId), "%02X%02X", mac[4], mac[5]);
+    snprintf(gDevName, sizeof(gDevName), "%s-%s", DEVICE_NAME, gDevId);
+  }
 }
 
 // command handed from the BLE callback (host task) to loop() for actuation
@@ -423,10 +438,10 @@ static void serialStatus() {
   Wire.beginTransmission(PCA9685_ADDR);
   bool pcaAck = Wire.endTransmission() == 0;
   serialReply(true,
-      "\"cmd\":\"status\",\"mode\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
+      "\"cmd\":\"status\",\"id\":\"%s\",\"name\":\"%s\",\"mode\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
       "\"pcaAck\":%s,\"i2cErrs\":%lu,\"lastI2cRc\":%u,\"ble\":%s,\"uptimeMs\":%lu,"
       "\"build\":\"" __DATE__ " " __TIME__ "\"",
-      stsOk ? "sts" : "pwm", stsOk ? "true" : "false", pos, currentSlot,
+      gDevId, gDevName, stsOk ? "sts" : "pwm", stsOk ? "true" : "false", pos, currentSlot,
       pcaAck ? "true" : "false", (unsigned long)i2cErrs, lastI2cRc,
       bleConnected ? "true" : "false", (unsigned long)millis());
 }
@@ -574,7 +589,8 @@ void setup() {
   currentSlot = 1;
   Serial.printf("SpiceDispenser: servos homed (i2c errors so far: %lu)\n", (unsigned long)i2cErrs);
 
-  NimBLEDevice::init(DEVICE_NAME);
+  deriveIdentity();   // unique per-board name before BLE advertises
+  NimBLEDevice::init(gDevName);
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(new SrvCB());
   NimBLEService *svc = server->createService(SERVICE_UUID);
@@ -593,7 +609,7 @@ void setup() {
   // response. Mirrors firmware-py/ble_adv.py build_payloads.
   NimBLEAdvertisementData advData;
   advData.setFlags(0x06);
-  advData.setName(DEVICE_NAME);
+  advData.setName(gDevName);
   NimBLEAdvertisementData scanResp;
   scanResp.addServiceUUID(NimBLEUUID(SERVICE_UUID));
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
@@ -603,7 +619,7 @@ void setup() {
   adv->setMinInterval(400); adv->setMaxInterval(400);  // 400 * 0.625ms = 250ms (matches _ADV_INTERVAL_US)
   NimBLEDevice::startAdvertising();
   ledAdvertising();  // blue: waiting for a phone
-  Serial.printf("BLE: advertising as \"%s\"\n", DEVICE_NAME);
+  Serial.printf("BLE: advertising as \"%s\"\n", gDevName);
 }
 
 void loop() {

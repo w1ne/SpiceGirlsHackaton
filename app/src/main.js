@@ -30,6 +30,11 @@ const LS = {
   // scans, so skipping the scan is what makes reconnect reliable.
   get deviceId() { return localStorage.getItem("ble_device_id") || CONFIG.BLE_DEVICE_ID || ""; },
   set deviceId(v) { v ? localStorage.setItem("ble_device_id", v) : localStorage.removeItem("ble_device_id"); },
+  // Per-unit cloud key, derived from the connected dispenser's advertised name
+  // ("SpiceGirls-XXXX") so several prototypes don't share one Supabase row.
+  // Empty → falls back to CONFIG.DEVICE_ID for old single-unit firmware.
+  get deviceKey() { return localStorage.getItem("device_key") || ""; },
+  set deviceKey(v) { v ? localStorage.setItem("device_key", v) : localStorage.removeItem("device_key"); },
   // Active character persona (personality + voice).
   get persona() { return localStorage.getItem("persona") || DEFAULT_PERSONA_ID; },
   set persona(v) { localStorage.setItem("persona", v); },
@@ -38,6 +43,12 @@ const LS = {
   set hellsKitchen(v) { localStorage.setItem("hells_kitchen", v ? "1" : "0"); },
 };
 const activePersona = () => getPersona(LS.persona);
+
+// Per-unit identity. The dispenser advertises "SpiceGirls-XXXX" (XXXX = last 2
+// MAC bytes); we key the cloud compartment row by that so prototypes don't
+// clobber each other. Unknown/old firmware ("SpiceGirls") → shared default.
+const keyFromName = (n) => { const m = /^SpiceGirls-([0-9A-Fa-f]{4})$/.exec(n || ""); return m ? "dispenser-" + m[1].toUpperCase() : ""; };
+const cloudDeviceId = () => LS.deviceKey || CONFIG.DEVICE_ID;
 
 const $ = (s) => document.querySelector(s);
 const slotsEl = $("#slots"), recipesEl = $("#recipes"), recipesWrap = $("#recipesWrap"),
@@ -53,7 +64,7 @@ function bubble(t, who = "sys") {
 
 // ---------- Supabase: compartments + mixes ----------
 async function loadDevice() {
-  const { data } = await sb.from("devices").select("slots").eq("device_id", CONFIG.DEVICE_ID).maybeSingle();
+  const { data } = await sb.from("devices").select("slots").eq("device_id", cloudDeviceId()).maybeSingle();
   slots = (data && data.slots) || {}; renderSlots();
 }
 function renderSlots() {
@@ -85,7 +96,7 @@ async function saveCompartments(map) {
     const n = String(parseInt(k, 10));
     if (+n >= 1 && +n <= 6 && v && String(v).trim()) merged[n] = String(v).trim();
   }
-  const { error } = await sb.from("devices").upsert({ device_id: CONFIG.DEVICE_ID, slots: merged }, { onConflict: "device_id" });
+  const { error } = await sb.from("devices").upsert({ device_id: cloudDeviceId(), slots: merged }, { onConflict: "device_id" });
   if (error) throw new Error(error.message);
   slots = merged; renderSlots();
   bubble(`Compartments: ${Object.entries(merged).sort((a, b) => +a[0] - +b[0]).map(([n, s]) => `${n}=${s}`).join(", ")}`);
@@ -174,7 +185,7 @@ function scanForDispenser(timeoutMs = 15000) {
       if (name) names.add(name);
       const hasUuid = (result.uuids || []).some((u) => String(u).toLowerCase() === want);
       const hasName = String(name).startsWith("SpiceGirls");
-      if (hasUuid || hasName) { clearTimeout(timer); finish(resolve, result.device); }
+      if (hasUuid || hasName) { clearTimeout(timer); finish(resolve, { device: result.device, name }); }
     }).catch((e) => { clearTimeout(timer); if (!done) { done = true; reject(e); } });
   });
 }
@@ -200,15 +211,19 @@ async function connectBLE() {
     // FALLBACK: only scan if we have no remembered device or the direct connect
     // failed. One scan, then connect — keep scan count low to avoid throttling.
     for (let attempt = 1; attempt <= 2 && !deviceId; attempt++) {
-      let device;
+      let found;
       try {
         status(attempt === 1 ? "scanning for dispenser…" : `scanning… (try ${attempt})`);
-        device = await scanForDispenser();
-        await BleClient.connect(device.deviceId, onDisconnect);
-        deviceId = device.deviceId;
+        found = await scanForDispenser();
+        await BleClient.connect(found.device.deviceId, onDisconnect);
+        deviceId = found.device.deviceId;
+        // Bind cloud state to THIS physical unit (from its advertised name), then
+        // reload its compartments so the UI shows the right unit's spices.
+        const k = keyFromName(found.name);
+        if (k && k !== LS.deviceKey) { LS.deviceKey = k; await loadDevice().catch(() => {}); }
       } catch (e) {
         lastErr = e;
-        try { if (device) await BleClient.disconnect(device.deviceId); } catch {}
+        try { if (found) await BleClient.disconnect(found.device.deviceId); } catch {}
         await sleep(900);
       }
     }
