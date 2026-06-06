@@ -5,6 +5,23 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.3.0
+
+- **ElevenLabs voice.** A new voice option in **Settings** — talk to the
+  dispenser through ElevenLabs Conversational AI instead of the default voice.
+  Same hands-free flow; the provider key stays server-side.
+- **Calibrate once, and it sticks.** The dispenser now remembers its mechanical
+  calibration (carousel home position, rotation timing, shutter open/close
+  angles) across reboots. Set it from the serial console — a new Calibration
+  card reads and writes the values — so a freshly built or re-built unit lines
+  up the compartments without reflashing.
+- **Run several dispensers side by side.** Each board now advertises a unique
+  name and keeps its own compartment setup, so multiple prototypes no longer
+  overwrite each other's spice layout. Just flash and go — every unit gets its
+  own identity automatically.
+- **Firmware now reports its version + unit id** over USB serial, so you can
+  tell at a glance which board is which and what it's running.
+
 ## v1.2.1
 
 - **Hears you better in a loud kitchen.** Enables the platform's voice

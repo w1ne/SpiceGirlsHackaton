@@ -19,6 +19,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
+#define FW_VERSION    "1.3.0"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -438,7 +439,7 @@ static void serialStatus() {
   Wire.beginTransmission(PCA9685_ADDR);
   bool pcaAck = Wire.endTransmission() == 0;
   serialReply(true,
-      "\"cmd\":\"status\",\"id\":\"%s\",\"name\":\"%s\",\"mode\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
+      "\"cmd\":\"status\",\"id\":\"%s\",\"name\":\"%s\",\"fw\":\"" FW_VERSION "\",\"mode\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
       "\"pcaAck\":%s,\"i2cErrs\":%lu,\"lastI2cRc\":%u,\"ble\":%s,\"uptimeMs\":%lu,"
       "\"build\":\"" __DATE__ " " __TIME__ "\"",
       gDevId, gDevName, stsOk ? "sts" : "pwm", stsOk ? "true" : "false", pos, currentSlot,
@@ -545,6 +546,7 @@ class SrvCB : public NimBLEServerCallbacks {
 
 void setup() {
   Serial.begin(115200); delay(300);
+  Serial.println("SpiceDispenser FW " FW_VERSION);
   calLoad();   // pull persisted calibration from NVS before homing uses it
   // Bring up the PCA9685 on I2C(0) and home the servos (mirrors Dispenser.init):
   // revolver to compartment 1, shutter closed, then let it settle.
