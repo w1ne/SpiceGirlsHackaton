@@ -10,6 +10,7 @@ import { createVoiceGate } from "./voiceGate.js";
 import { createRoaster } from "./roast.js";
 import { RAMSAY_CLIPS } from "./ramsayClips.js";
 import { PERSONAS, DEFAULT_PERSONA_ID, getPersona, personaSystemPrompt } from "./personas.js";
+import { createCalTest } from "./caltest.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
@@ -259,7 +260,10 @@ function onDisconnect() {
 let statusWaiters = [];
 function onStatus(value) {
   statusWaiters.splice(0).forEach((r) => r()); // a pending dispense heard the firmware reply
-  let s; try { s = JSON.parse(dataViewToText(value)); } catch { return; }
+  const raw = dataViewToText(value);
+  let s; try { s = JSON.parse(raw); } catch { return; }
+  calTest.onLine(s, raw);       // mirror every line in the Calibration & test console
+  if (s.ok !== undefined) return; // a {"cmd":...} reply for that screen, not a dispense status
   const spice = slots[s.slot] ?? (s.slot != null ? `compartment ${s.slot}` : "");
   if (s.status === "running") status(`dispensing ${spice}…`);
   else if (s.status === "done") status("✓ done", "ok");
@@ -317,6 +321,18 @@ async function unpairDispenser() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- calibration & test screen ----------
+// Firmware ≥1.4 accepts the serial console's {"cmd":...} dialect on the command
+// characteristic (the negotiated MTU is 512, so these longer lines fit fine —
+// only the dispense path predates that and keeps its short per-step writes).
+async function sendCmd(obj) {
+  await ensureLive();
+  if (!deviceId) throw new Error("dispenser not connected");
+  const line = typeof obj === "string" ? obj : JSON.stringify(obj);
+  await BleClient.write(deviceId, CONFIG.BLE_SERVICE, CONFIG.BLE_CMD, textToDataView(line));
+}
+const calTest = createCalTest({ send: sendCmd, dispense: (plan) => dispense(plan) });
 
 // dispense over BLE; if no device is connected, SIMULATE so the app is fully
 // testable standalone (e.g. driven over adb) without hardware.
@@ -694,6 +710,7 @@ function openSettings() {
   $("#settings").showModal();
 }
 $("#unpairBtn").onclick = () => { $("#settings").close(); unpairDispenser(); };
+$("#calTestBtn").onclick = () => { $("#settings").close(); calTest.open(); };
 $("#settingsBtn").onclick = openSettings;
 $("#saveSettings").onclick = () => {
   LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value;

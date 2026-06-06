@@ -1,0 +1,62 @@
+import { describe, test, expect } from "vitest";
+import { driveLabel, statusFields, calSavePayload } from "./caltest.js";
+
+// ---------- revolver drive label (status card) ----------
+describe("driveLabel", () => {
+  test("names each drive", () => {
+    expect(driveLabel({ mode: "sts" })).toBe("STS3215 closed-loop");
+    expect(driveLabel({ mode: "spin" })).toBe("PWM-360 continuous");
+    expect(driveLabel({ mode: "pos" })).toBe("positional 180°");
+  });
+
+  test("marks auto-resolved drives", () => {
+    expect(driveLabel({ mode: "sts", drive: "auto" })).toBe("STS3215 closed-loop (auto)");
+    expect(driveLabel({ mode: "spin", drive: "spin" })).toBe("PWM-360 continuous");
+  });
+
+  test("understands pre-1.4 firmware that reports mode pwm", () => {
+    expect(driveLabel({ mode: "pwm" })).toBe("PWM-360 continuous");
+  });
+});
+
+// ---------- status report → display fields ----------
+describe("statusFields", () => {
+  const report = {
+    cmd: "status", fw: "1.4.0", mode: "sts", drive: "auto", stsOk: true, stsPos: 2048,
+    slot: 3, pcaAck: true, i2cErrs: 0, build: "Jun  6 2026",
+  };
+
+  test("formats a healthy report", () => {
+    const f = statusFields(report);
+    expect(f.sts).toBe("answering");
+    expect(f.pos).toBe("2048 ticks (180.0°)");
+    expect(f.slot).toBe("3");
+    expect(f.pca).toBe("ack");
+    expect(f.fw).toContain("1.4.0");
+  });
+
+  test("flags missing hardware", () => {
+    const f = statusFields({ ...report, stsOk: false, stsPos: -1, pcaAck: false, slot: 0 });
+    expect(f.sts).toBe("not found");
+    expect(f.pos).toBe("—");
+    expect(f.slot).toMatch(/unknown/);
+    expect(f.pca).toMatch(/servo power/);
+  });
+});
+
+// ---------- calibration inputs → save command ----------
+describe("calSavePayload", () => {
+  test("builds the full cal command with numeric fields", () => {
+    const p = calSavePayload({
+      offset: "2048", msPerSlot: "500", shutterOpen: "120", shutterClosed: "20",
+      stsSpeed: "1000", stsAcc: "50", spinUs: "1600",
+      revolver: "sts", slotAngles: ["0", "30", "60", "90", "120", "150"],
+    });
+    expect(p).toEqual({
+      cmd: "cal",
+      slot1_offset: 2048, ms_per_slot: 500, shutter_open: 120, shutter_closed: 20,
+      sts_speed: 1000, sts_acc: 50, spin_us: 1600,
+      revolver: "sts", slot_angles: [0, 30, 60, 90, 120, 150],
+    });
+  });
+});

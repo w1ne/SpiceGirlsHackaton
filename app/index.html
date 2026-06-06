@@ -92,6 +92,10 @@
         <small id="pairedInfo" class="muted">Not paired</small>
         <button id="unpairBtn" type="button" class="ghost">Unpair dispenser</button>
       </div>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-top:4px">
+        <small class="muted">Servos &amp; hardware</small>
+        <button id="calTestBtn" type="button" class="ghost">🛠 Calibration &amp; test</button>
+      </div>
       <div class="actions">
         <button id="saveSettings" value="save">Save</button>
         <button value="cancel" class="ghost">Cancel</button>
@@ -99,6 +103,8 @@
       <p class="muted" style="text-align:center;font-size:11px;margin:14px 0 0">Spice Girls <span id="appVer"></span></p>
     </form>
   </dialog>
+
+  <dialog id="caltest" class="caltest"></dialog>
 
   <script type="module" src="./src/main.js"></script>
 </body>

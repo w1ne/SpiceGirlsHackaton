@@ -86,3 +86,34 @@ dialog input[type=text], dialog select { width: 100%; margin-top: 6px; padding: 
 /* Hell's Kitchen toggle: dim ember when off, lit when Gordon is on duty */
 #roastBtn { opacity: 0.45; }
 #roastBtn.on { opacity: 1; text-shadow: 0 0 12px #ff5a1f; }
+
+/* Calibration & test — the bench console as a phone dialog */
+.caltest { max-height: 88vh; overflow-y: auto; }
+.caltest h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin: 18px 0 8px; display: flex; align-items: center; gap: 8px; }
+.caltest h3 button { padding: 4px 10px; font-size: 12px; background: #1a1212;
+  border: 1px solid #3a2727; color: var(--text); }
+.caltest .ct-poll { display: flex; align-items: center; gap: 4px; font-weight: 400;
+  text-transform: none; letter-spacing: 0; margin-left: auto; }
+.caltest .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0;
+  font-size: 14px; }
+.caltest input[type=number] { width: 76px; padding: 8px; border-radius: 10px;
+  border: 1px solid #3a2727; background: #1a1212; color: var(--text); font: inherit; }
+.caltest input[type=range] { width: 100%; accent-color: var(--accent); }
+.caltest .row button { padding: 8px 12px; font-size: 14px; background: #1a1212;
+  border: 1px solid #3a2727; color: var(--text); }
+.caltest .ct-primary { background: var(--accent) !important; color: #fff !important; border: none !important; }
+.caltest .ct-kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px;
+  font-family: ui-monospace, monospace; font-size: 13px; }
+.caltest .ct-kv b { color: var(--muted); font-weight: 400; }
+.caltest .ct-slots { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.caltest .ct-slots button { padding: 10px 0; background: var(--accent); color: #fff; }
+.caltest .ct-sw { width: 32px; height: 32px; border-radius: 8px; border: 1px solid #3a2727; padding: 0; }
+.caltest .ct-angles input { width: 52px; }
+.caltest .ct-note { font-size: 12px; margin: 2px 0 6px; }
+.caltest .ct-log { height: 150px; overflow-y: auto; background: #120d0d; border: 1px solid #3a2727;
+  border-radius: 10px; padding: 8px; font: 11px ui-monospace, monospace; white-space: pre-wrap; }
+.caltest .ct-log .tx { color: #82b1ff; } .caltest .ct-log .ok { color: var(--ok); }
+.caltest .ct-log .err { color: var(--err); }
+.caltest .ct-raw { flex: 1; width: auto; font-family: ui-monospace, monospace; font-size: 13px; }
+.caltest .ok { color: var(--ok); font-size: 13px; }
