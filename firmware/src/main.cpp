@@ -115,15 +115,24 @@ static int calSlot1Offset  = STS_SLOT1_OFFSET;     // STS: encoder ticks, slot 1
 static int calMsPerSlot    = REVOLVER_MS_PER_SLOT; // PWM-360: ms to advance one compartment
 static int calShutterOpen  = SHUTTER_OPEN;         // shutter open angle (deg)
 static int calShutterClose = SHUTTER_CLOSED;       // shutter closed angle (deg)
+// Revolver drive VARIANT (PWM path only): 0 = continuous spin (MG90S-360, the
+// default — unchanged behavior), 1 = positional 180° servo where each compartment
+// is a fixed, calibrated servo angle. Per-slot angles persist like the rest.
+#define REVOLVER_POS_SETTLE_MS 600                 // travel/settle time for a positional move
+static const int CAL_DEFAULT_ANGLE[NUM_SLOTS] = {0, 30, 60, 90, 120, 150};
+static int calRevolverMode = 0;
+static int calSlotAngle[NUM_SLOTS] = {0, 30, 60, 90, 120, 150};
 static void calLoad() {
   calPrefs.begin("spicecal", true);                // read-only
   calSlot1Offset  = calPrefs.getInt("s1off",  STS_SLOT1_OFFSET);
   calMsPerSlot    = calPrefs.getInt("msps",   REVOLVER_MS_PER_SLOT);
   calShutterOpen  = calPrefs.getInt("shopen", SHUTTER_OPEN);
   calShutterClose = calPrefs.getInt("shcls",  SHUTTER_CLOSED);
+  calRevolverMode = calPrefs.getInt("revmode", 0);
+  for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calSlotAngle[i] = calPrefs.getInt(k, CAL_DEFAULT_ANGLE[i]); }
   calPrefs.end();
-  Serial.printf("cal loaded: s1off=%d msps=%d shopen=%d shcls=%d\n",
-                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose);
+  Serial.printf("cal loaded: s1off=%d msps=%d shopen=%d shcls=%d revmode=%d\n",
+                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose, calRevolverMode);
 }
 static void calSave() {
   calPrefs.begin("spicecal", false);               // read-write
@@ -131,6 +140,8 @@ static void calSave() {
   calPrefs.putInt("msps",   calMsPerSlot);
   calPrefs.putInt("shopen", calShutterOpen);
   calPrefs.putInt("shcls",  calShutterClose);
+  calPrefs.putInt("revmode", calRevolverMode);
+  for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calPrefs.putInt(k, calSlotAngle[i]); }
   calPrefs.end();
 }
 
@@ -358,9 +369,25 @@ static bool moveRevolverPwm(int slot) {
   return true;
 }
 
-// runtime dispatch: STS revolver if one answered at boot, PWM-360 otherwise
+// Positional 180° revolver variant: drive the servo to the compartment's
+// calibrated angle and HOLD it (no channel release — a 180° servo needs the pulse
+// to hold position against the carousel). Reaches only the slots whose angles fall
+// within the servo's 0-180° sweep; unreachable slots are simply left uncalibrated.
+static bool moveRevolverServo180(int slot) {
+  if (slot == currentSlot) return true;
+  int ang = calSlotAngle[constrain(slot, 1, NUM_SLOTS) - 1];
+  Serial.printf("  revolver(180) -> compartment %d (angle %d deg)\n", slot, ang);
+  pcaSetAngle(REVOLVER_CH, ang);
+  delay(REVOLVER_POS_SETTLE_MS);
+  currentSlot = slot;
+  return true;
+}
+
+// runtime dispatch: STS if one answered at boot; else the configured PWM variant
+// (continuous spin by default, or positional 180° when calRevolverMode is set)
 static bool moveRevolver(int slot) {
-  return stsOk ? moveRevolverSts(slot) : moveRevolverPwm(slot);
+  if (stsOk) return moveRevolverSts(slot);
+  return calRevolverMode ? moveRevolverServo180(slot) : moveRevolverPwm(slot);
 }
 static void sweeps(int n) {
   for (int i = 0; i < n; i++) {
@@ -505,16 +532,34 @@ static void handleSerialLine(const String &line) {
     }
     if (doc["reset"] | false) {
       calSlot1Offset = STS_SLOT1_OFFSET; calMsPerSlot = REVOLVER_MS_PER_SLOT;
-      calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED; changed = true;
+      calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED;
+      calRevolverMode = 0;
+      for (int i = 0; i < NUM_SLOTS; i++) calSlotAngle[i] = CAL_DEFAULT_ANGLE[i];
+      changed = true;
     }
     if (doc["slot1_offset"].is<int>())   { calSlot1Offset  = ((doc["slot1_offset"].as<int>() % STS_TICKS) + STS_TICKS) % STS_TICKS; changed = true; }
     if (doc["ms_per_slot"].is<int>())    { calMsPerSlot    = constrain(doc["ms_per_slot"].as<int>(), 50, 5000); changed = true; }
     if (doc["shutter_open"].is<int>())   { calShutterOpen  = constrain(doc["shutter_open"].as<int>(), 0, 180); changed = true; }
     if (doc["shutter_closed"].is<int>()) { calShutterClose = constrain(doc["shutter_closed"].as<int>(), 0, 180); changed = true; }
+    // revolver VARIANT: "spin" (continuous) | "pos" (positional 180°), or revmode 0/1
+    if (doc["revmode"].is<int>())            { calRevolverMode = doc["revmode"].as<int>() ? 1 : 0; changed = true; }
+    if (doc["revolver"].is<const char *>())  { calRevolverMode = strcmp(doc["revolver"].as<const char *>(), "pos") == 0 ? 1 : 0; changed = true; }
+    // per-slot angle for positional mode: one slot ({"slot":N,"angle":A}) or all ({"slot_angles":[...]})
+    if (doc["slot"].is<int>() && doc["angle"].is<int>()) {
+      int sl = doc["slot"].as<int>();
+      if (sl >= 1 && sl <= NUM_SLOTS) { calSlotAngle[sl - 1] = constrain(doc["angle"].as<int>(), 0, 180); changed = true; }
+    }
+    if (doc["slot_angles"].is<JsonArray>()) {
+      int i = 0; for (JsonVariant v : doc["slot_angles"].as<JsonArray>()) { if (i < NUM_SLOTS) calSlotAngle[i] = constrain(v.as<int>(), 0, 180); i++; }
+      changed = true;
+    }
     if (changed) calSave();
     serialReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
-                "\"shutter_open\":%d,\"shutter_closed\":%d,\"saved\":%s",
+                "\"shutter_open\":%d,\"shutter_closed\":%d,\"revolver\":\"%s\","
+                "\"slot_angles\":[%d,%d,%d,%d,%d,%d],\"saved\":%s",
                 calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose,
+                calRevolverMode ? "pos" : "spin",
+                calSlotAngle[0], calSlotAngle[1], calSlotAngle[2], calSlotAngle[3], calSlotAngle[4], calSlotAngle[5],
                 changed ? "true" : "false");
     return;
   }
