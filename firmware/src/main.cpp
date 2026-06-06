@@ -22,7 +22,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
-#define FW_VERSION    "1.5.1"   // keep in sync with the app release / git tag
+#define FW_VERSION    "1.5.2"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -805,5 +805,18 @@ void loop() {
     cmdFromBle = true; handleCmdLine(j); cmdFromBle = false;
   }
   pollSerial();   // USB-serial control console (same JSON dialect as BLE)
+  // Advertising watchdog. onDisconnect restarts advertising, but NimBLE can also
+  // stop beaconing WITHOUT a disconnect (aborted connect attempt, controller
+  // hiccup) — the board then sits invisible until a power cycle and the phone
+  // "cannot find a dispenser". Re-arm it whenever we're idle and silent.
+  static uint32_t advCheckAt = 0;
+  if ((int32_t)(millis() - advCheckAt) >= 0) {
+    advCheckAt = millis() + 5000;
+    if (!bleConnected && !NimBLEDevice::getAdvertising()->isAdvertising()) {
+      Serial.println("BLE: advertising died — restarting it");
+      NimBLEDevice::startAdvertising();
+      ledAdvertising();
+    }
+  }
   delay(20);
 }

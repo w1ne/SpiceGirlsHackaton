@@ -5,6 +5,14 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.5.2
+
+- **The dispenser can no longer go invisible.** BLE advertising could silently
+  die (aborted connect attempt, controller hiccup) and the board then sat
+  unreachable — "cannot find a dispenser" — until a power cycle. The firmware
+  now watches for that and re-arms advertising within 5 seconds whenever it's
+  idle and silent. (Firmware fix; app unchanged.)
+
 ## v1.5.1
 
 - **The 180° carousel glides instead of slamming.** A plain PWM servo slews at
