@@ -5,6 +5,15 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.4.2
+
+- **Angle jog for the 180° revolver.** Calibration & test (app **and** bench
+  console) gains a "Revolver — angle" card: drive the positional servo to any
+  angle with a slider, then tap a compartment number to store that angle as the
+  slot's position — Save to board persists it. This is how you calibrate a
+  180°-servo carousel; the raw-position card stays for bus-servo boards.
+  (App + console only — no firmware change.)
+
 ## v1.4.1
 
 - **Settings gear always reachable.** On small screens (or large system font

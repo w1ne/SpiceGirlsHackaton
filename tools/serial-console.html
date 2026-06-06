@@ -75,6 +75,14 @@
       <button id="stsGo">Go</button> <button id="stsRead">Read</button>
       <span id="stsActual" style="color:var(--dim)">actual: —</span>
     </div>
+    <h2 style="margin-top:14px">Revolver — angle (180° servo)</h2>
+    <input type="range" id="angSlider" min="0" max="180" value="90">
+    <div class="row">
+      <input type="number" id="angVal" min="0" max="180" value="90">
+      <button id="angGo">Go</button>
+      <span style="color:var(--dim)">store as slot</span><span id="angStore"></span>
+    </div>
+    <div class="row" style="color:var(--dim);font-size:12px;margin-top:-2px">jog until a compartment is under the chute, tap its number — the angle lands in slot° (Save to persist)</div>
   </div>
 
   <div class="card">
@@ -316,6 +324,18 @@ for (let s = 1; s <= 6; s++) {
 $('stsSlider').oninput = () => $('stsPos').value = $('stsSlider').value;
 $('stsGo').onclick = () => send({ cmd: 'sts', pos: +$('stsPos').value });
 $('stsRead').onclick = () => send({ cmd: 'sts' });
+// 180° positional revolver: jog by angle (PCA ch8), store per-slot
+$('angSlider').oninput = () => $('angVal').value = $('angSlider').value;
+$('angGo').onclick = () => send({ cmd: 'pca', ch: 8, deg: +$('angVal').value });
+for (let s = 1; s <= 6; s++) {
+  const b = document.createElement('button');
+  b.textContent = s; b.style.padding = '4px 9px';
+  b.onclick = () => {
+    document.querySelector(`.calAng[data-slot="${s}"]`).value = +$('angVal').value;
+    log(`slot ${s} angle = ${$('angVal').value}° (Save to persist)`, 'tx');
+  };
+  $('angStore').appendChild(b);
+}
 
 // shutter + raw PCA
 document.querySelectorAll('[data-pca]').forEach(b => b.onclick = () => send(b.dataset.pca));

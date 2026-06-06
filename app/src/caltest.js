@@ -68,7 +68,7 @@ const HTML = `
   <div class="ct-slots" id="ctSlots"></div>
   <label class="row">dose <input type="number" id="ctDose" value="1" min="1" max="9"></label>
 
-  <h3>Revolver — raw position</h3>
+  <h3>Revolver — raw position (bus servo)</h3>
   <input type="range" id="ctStsSlider" min="0" max="4095" value="0">
   <div class="row">
     <input type="number" id="ctStsPos" min="0" max="4095" value="0">
@@ -76,6 +76,17 @@ const HTML = `
     <button type="button" id="ctStsRead">Read</button>
     <span id="ctStsActual" class="muted">actual: —</span>
   </div>
+
+  <h3>Revolver — angle (180° servo)</h3>
+  <input type="range" id="ctAngSlider" min="0" max="180" value="90">
+  <div class="row">
+    <input type="number" id="ctAngVal" min="0" max="180" value="90">
+    <button type="button" id="ctAngGo">Go</button>
+    <span class="muted">drives the PWM revolver directly</span>
+  </div>
+  <div class="row">store angle as slot
+    <span id="ctAngStore"></span></div>
+  <div class="muted ct-note">jog until a compartment is under the chute, then tap its number — the angle lands in slot° below; Save to board to persist</div>
 
   <h3>Shutter</h3>
   <div class="row">
@@ -176,6 +187,19 @@ export function createCalTest({ send, dispense }) {
     $("ctStsSlider").oninput = () => $("ctStsPos").value = $("ctStsSlider").value;
     $("ctStsGo").onclick = () => tx({ cmd: "sts", pos: +$("ctStsPos").value });
     $("ctStsRead").onclick = () => tx({ cmd: "sts" });
+    // 180° positional revolver: jog by angle (PCA ch8), then store per-slot
+    $("ctAngSlider").oninput = () => $("ctAngVal").value = $("ctAngSlider").value;
+    $("ctAngGo").onclick = () => tx({ cmd: "pca", ch: 8, deg: +$("ctAngVal").value });
+    for (let s = 1; s <= 6; s++) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = s;
+      b.onclick = () => {
+        const ang = +$("ctAngVal").value;
+        dlg.querySelector(`.ctAng[data-slot="${s}"]`).value = ang;
+        log(`slot ${s} angle = ${ang}° (Save to board to persist)`, "tx");
+      };
+      $("ctAngStore").appendChild(b);
+    }
     // shutter buttons use the CURRENT calibration inputs, so you can try an angle
     // before saving it
     $("ctShOpen").onclick = () => tx({ cmd: "pca", ch: 12, deg: +$("ctCalShO").value });
