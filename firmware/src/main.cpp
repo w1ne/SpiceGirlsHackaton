@@ -22,7 +22,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
-#define FW_VERSION    "1.5.2"   // keep in sync with the app release / git tag
+#define FW_VERSION    "1.5.3"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -125,6 +125,7 @@ static int calShutterClose = SHUTTER_CLOSED;       // shutter closed angle (deg)
 // so recalibrate ms/compartment after touching it).
 static int calStsSpeed     = STS_SPEED;            // STS: goal speed (servo units)
 static int calStsAcc       = STS_ACC;              // STS: acceleration ramp (0-254)
+static int calStsDir       = 1;                    // STS: +1/-1, slot numbering direction
 static int calSpinUs       = REVOLVER_SPIN_US;     // PWM-360: forward pulse width (µs)
 // A plain PWM servo always slews at full speed; the positional revolver instead
 // RAMPS the commanded angle at pos_speed deg/s so the carousel doesn't slam
@@ -143,6 +144,10 @@ static const char *DRV_NAME[] = {"auto", "sts", "spin", "pos"};
 static const int CAL_DEFAULT_ANGLE[NUM_SLOTS] = {0, 30, 60, 90, 120, 150};
 static int calRevolverDrive = DRV_AUTO;
 static int calSlotAngle[NUM_SLOTS] = {0, 30, 60, 90, 120, 150};
+// STS per-compartment encoder ticks (hand calibration: free the torque, turn the
+// carousel to each compartment, store the encoder reading). -1 = not set — that
+// slot falls back to the computed position slot1_offset + dir*(i-1)*ticks/6.
+static int calSlotTick[NUM_SLOTS] = {-1, -1, -1, -1, -1, -1};
 static void calLoad() {
   calPrefs.begin("spicecal", true);                // read-only
   calSlot1Offset  = calPrefs.getInt("s1off",  STS_SLOT1_OFFSET);
@@ -157,6 +162,8 @@ static void calLoad() {
   // both under STS auto-detect); migrate so an old positional board keeps working.
   calRevolverDrive = calPrefs.getInt("rdrv", calPrefs.getInt("revmode", 0) ? DRV_POS : DRV_AUTO);
   for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calSlotAngle[i] = calPrefs.getInt(k, CAL_DEFAULT_ANGLE[i]); }
+  for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "tick%d", i); calSlotTick[i] = calPrefs.getInt(k, -1); }
+  calStsDir = calPrefs.getInt("stsdir", 1);
   calPrefs.end();
   Serial.printf("cal loaded: s1off=%d msps=%d shopen=%d shcls=%d drive=%s\n",
                 calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose, DRV_NAME[calRevolverDrive]);
@@ -173,6 +180,8 @@ static void calSave() {
   calPrefs.putInt("posspd", calPosSpeed);
   calPrefs.putInt("rdrv", calRevolverDrive);
   for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calPrefs.putInt(k, calSlotAngle[i]); }
+  for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "tick%d", i); calPrefs.putInt(k, calSlotTick[i]); }
+  calPrefs.putInt("stsdir", calStsDir);
   calPrefs.end();
 }
 
@@ -385,7 +394,12 @@ static int stsGoto(int target) {
 // never reaches the target (jam / power loss) — caller reports it.
 static bool moveRevolverSts(int slot) {
   if (slot == currentSlot) return true;
-  int target = (calSlot1Offset + (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS;
+  // A hand-calibrated per-compartment tick wins; otherwise compute from the home
+  // offset, with calStsDir flipping which way compartment numbers advance around
+  // the carousel (+1: slot 2 at a higher encoder count than slot 1, -1: lower).
+  int target = calSlotTick[slot - 1] >= 0
+      ? calSlotTick[slot - 1]
+      : ((calSlot1Offset + calStsDir * (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS + STS_TICKS) % STS_TICKS;
   Serial.printf("  revolver -> compartment %d (STS pos %d)\n", slot, target);
   if (!stsOk) { Serial.println("  REVOLVER FAIL: STS3215 was not found at boot"); return false; }
   if (stsGoto(target) < 0) { Serial.println("  REVOLVER FAIL: target not reached (jammed? servo power?)"); return false; }
@@ -545,9 +559,9 @@ static void handle(const String &json) {
 // its Calibration menu; dispense {"status":...} lines are untouched).
 static bool cmdFromBle = false;   // set around handleCmdLine() for a BLE-borne cmd
 static void cmdReply(bool ok, const char *fmt = nullptr, ...) {
-  char extra[256] = "";   // status report is ~165 chars; 160 truncated it (broken JSON)
+  char extra[384] = "";   // the full cal report is ~290 chars; smaller buffers truncated it (broken JSON)
   if (fmt) { va_list ap; va_start(ap, fmt); vsnprintf(extra, sizeof(extra), fmt, ap); va_end(ap); }
-  char line[300];
+  char line[448];
   snprintf(line, sizeof(line), "{\"ok\":%s%s%s}", ok ? "true" : "false", fmt ? "," : "", extra);
   Serial.println(line);
   if (cmdFromBle && statusChar) { statusChar->setValue((uint8_t *)line, strlen(line)); statusChar->notify(); }
@@ -581,6 +595,14 @@ static void handleCmdLine(const String &line) {
   }
   if (cmd == "sts") {
     if (!stsOk) { cmdReply(false, "\"msg\":\"no STS servo - try probe\""); return; }
+    // {"cmd":"sts","torque":0} frees the servo so the carousel can be turned BY
+    // HAND (hand calibration: move to a compartment, read the encoder). 1 re-locks.
+    if (doc["torque"].is<int>()) {
+      uint8_t t = doc["torque"].as<int>() ? 1 : 0;
+      if (!stsWriteReg(40, &t, 1)) { cmdReply(false, "\"msg\":\"no reply from STS3215\""); return; }
+      cmdReply(true, "\"cmd\":\"sts\",\"torque\":%d", t);
+      return;
+    }
     if (doc["pos"].is<int>()) {
       int got = stsGoto(doc["pos"].as<int>());
       currentSlot = 0;                          // raw move desyncs the slot tracker
@@ -629,9 +651,10 @@ static void handleCmdLine(const String &line) {
       calSlot1Offset = STS_SLOT1_OFFSET; calMsPerSlot = REVOLVER_MS_PER_SLOT;
       calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED;
       calStsSpeed = STS_SPEED; calStsAcc = STS_ACC; calSpinUs = REVOLVER_SPIN_US;
-      calPosSpeed = REVOLVER_POS_DEGS;
+      calPosSpeed = REVOLVER_POS_DEGS; calStsDir = 1;
       calRevolverDrive = DRV_AUTO;
       for (int i = 0; i < NUM_SLOTS; i++) calSlotAngle[i] = CAL_DEFAULT_ANGLE[i];
+      for (int i = 0; i < NUM_SLOTS; i++) calSlotTick[i] = -1;
       if (stsOk) stsApplySpeed();
       changed = true;
     }
@@ -677,15 +700,35 @@ static void handleCmdLine(const String &line) {
       }
       changed = true;
     }
+    // STS per-compartment encoder ticks (hand calibration); -1 clears one back to
+    // the computed position. {"slot":N,"tick":T} for one, {"slot_ticks":[...]} for all.
+    if (doc["slot"].is<int>() && doc["tick"].is<int>()) {
+      int sl = doc["slot"].as<int>();
+      if (sl >= 1 && sl <= NUM_SLOTS) {
+        int t = doc["tick"].as<int>();
+        calSlotTick[sl - 1] = t < 0 ? -1 : constrain(t, 0, STS_TICKS - 1); changed = true;
+      }
+    }
+    if (doc["slot_ticks"].is<JsonArray>()) {
+      int i = 0;
+      for (JsonVariant v : doc["slot_ticks"].as<JsonArray>()) {
+        if (i < NUM_SLOTS) { int t = v.as<int>(); calSlotTick[i] = t < 0 ? -1 : constrain(t, 0, STS_TICKS - 1); }
+        i++;
+      }
+      changed = true;
+    }
+    if (doc["sts_dir"].is<int>())        { calStsDir = doc["sts_dir"].as<int>() < 0 ? -1 : 1; changed = true; }
     if (changed) calSave();
     cmdReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
                 "\"shutter_open\":%d,\"shutter_closed\":%d,"
-                "\"sts_speed\":%d,\"sts_acc\":%d,\"spin_us\":%d,\"pos_speed\":%d,\"revolver\":\"%s\","
-                "\"slot_angles\":[%d,%d,%d,%d,%d,%d],\"saved\":%s",
+                "\"sts_speed\":%d,\"sts_acc\":%d,\"sts_dir\":%d,\"spin_us\":%d,\"pos_speed\":%d,\"revolver\":\"%s\","
+                "\"slot_angles\":[%d,%d,%d,%d,%d,%d],"
+                "\"slot_ticks\":[%d,%d,%d,%d,%d,%d],\"saved\":%s",
                 calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose,
-                calStsSpeed, calStsAcc, calSpinUs, calPosSpeed,
+                calStsSpeed, calStsAcc, calStsDir, calSpinUs, calPosSpeed,
                 DRV_NAME[calRevolverDrive],
                 calSlotAngle[0], calSlotAngle[1], calSlotAngle[2], calSlotAngle[3], calSlotAngle[4], calSlotAngle[5],
+                calSlotTick[0], calSlotTick[1], calSlotTick[2], calSlotTick[3], calSlotTick[4], calSlotTick[5],
                 changed ? "true" : "false");
     return;
   }

@@ -5,6 +5,21 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.5.3
+
+- **Hand calibration for the bus-servo carousel.** New **Free (hand-turn) /
+  Lock** buttons release the servo's torque so you can turn the carousel by
+  hand; line a compartment up, tap its number, and the encoder reading is
+  stored as that slot's position — per-compartment **slot ticks** now override
+  the computed even spacing (so an unevenly-built carousel lands dead-center
+  on every slot). Save to board persists; editable any time for fine-tuning.
+- **Calibration card adapts to the board.** It now shows only the controls for
+  the drive the unit actually runs — bus-servo boards see homing/ticks/speed,
+  180° boards see angles, spin boards see timing — instead of everything at
+  once.
+- Firmware also gains a slot numbering direction (`sts_dir`) for carousels
+  whose compartment numbers run opposite to the encoder.
+
 ## v1.5.2
 
 - **The dispenser can no longer go invisible.** BLE advertising could silently

@@ -46,6 +46,7 @@ export function calSavePayload(v) {
     sts_speed: +v.stsSpeed, sts_acc: +v.stsAcc, spin_us: +v.spinUs, pos_speed: +v.posSpeed,
     revolver: v.revolver,
     slot_angles: v.slotAngles.map((a) => String(a).trim() === "" ? -1 : +a),
+    slot_ticks: v.slotTicks.map((t) => String(t).trim() === "" ? -1 : +t),
   };
 }
 
@@ -79,25 +80,30 @@ const HTML = `
   <div class="ct-slots" id="ctSlots"></div>
   <label class="row">dose <input type="number" id="ctDose" value="1" min="1" max="9"></label>
 
-  <h3>Revolver — raw position (bus servo)</h3>
-  <input type="range" id="ctStsSlider" min="0" max="4095" value="0">
-  <div class="row">
+  <h3 class="drv drv-sts">Revolver — raw position (bus servo)</h3>
+  <input class="drv drv-sts" type="range" id="ctStsSlider" min="0" max="4095" value="0">
+  <div class="row drv drv-sts">
     <input type="number" id="ctStsPos" min="0" max="4095" value="0">
     <button type="button" id="ctStsGo">Go</button>
     <button type="button" id="ctStsRead">Read</button>
     <span id="ctStsActual" class="muted">actual: —</span>
   </div>
+  <div class="row drv drv-sts">
+    <button type="button" id="ctTorqueOff" title="free the servo so the carousel turns by hand">Free (hand-turn)</button>
+    <button type="button" id="ctTorqueOn" title="re-engage the servo">Lock</button>
+    <span class="muted">hand calibration: Free, turn to a compartment, store its tick below</span>
+  </div>
 
-  <h3>Revolver — angle (180° servo)</h3>
-  <input type="range" id="ctAngSlider" min="0" max="180" value="90">
-  <div class="row">
+  <h3 class="drv drv-pos">Revolver — angle (180° servo)</h3>
+  <input class="drv drv-pos" type="range" id="ctAngSlider" min="0" max="180" value="90">
+  <div class="row drv drv-pos">
     <input type="number" id="ctAngVal" min="0" max="180" value="90">
     <button type="button" id="ctAngGo">Go</button>
     <span class="muted">drives the PWM revolver directly</span>
   </div>
-  <div class="row">store angle as slot
+  <div class="row drv drv-pos">store angle as slot
     <span id="ctAngStore"></span></div>
-  <div class="muted ct-note">jog until a compartment is under the chute, then tap its number — the angle lands in slot° below; Save to board to persist</div>
+  <div class="muted ct-note drv drv-pos">jog until a compartment is under the chute, then tap its number — the angle lands in slot° below; Save to board to persist</div>
 
   <h3>Shutter</h3>
   <div class="row">
@@ -117,18 +123,25 @@ const HTML = `
 
   <h3>Calibration <button type="button" id="ctCalRead">Read</button>
       <span class="muted ct-note">saved to the board's flash</span></h3>
-  <div class="row">slot 1 offset
+  <div class="row drv drv-sts">slot 1 offset
     <input type="number" id="ctCalOff" min="0" max="4095" value="0">
     <button type="button" id="ctCalHome" title="snap to where the carousel sits now">Home = current</button></div>
-  <div class="muted ct-note">jog with the raw slider until compartment 1 is under the chute, then Home</div>
-  <div class="row">ms / compartment <input type="number" id="ctCalMs" min="50" max="5000" value="500"></div>
+  <div class="muted ct-note drv drv-sts">jog with the raw slider until compartment 1 is under the chute, then Home</div>
+  <div class="row drv drv-sts">STS speed <input type="number" id="ctCalStsSpd" min="50" max="4095" value="1000">
+    acc <input type="number" id="ctCalStsAcc" min="0" max="254" value="50"></div>
+  <div class="row ct-angles drv drv-sts">slot ticks
+    ${[1, 2, 3, 4, 5, 6].map((s) =>
+      `<input type="number" class="ctTick" data-slot="${s}" min="0" max="4095" title="compartment ${s} encoder tick">`).join("")}
+  </div>
+  <div class="row drv drv-sts">store tick as slot <span id="ctTickStore"></span></div>
+  <div class="muted ct-note drv drv-sts">per-compartment encoder position — overrides the computed spacing; leave empty to fall back to slot-1-offset math</div>
+  <div class="row drv drv-spin">ms / compartment <input type="number" id="ctCalMs" min="50" max="5000" value="500"></div>
+  <div class="row drv drv-spin">spin µs <input type="number" id="ctCalSpinUs" min="1000" max="2000" value="1600"></div>
+  <div class="muted ct-note drv drv-spin">spin µs sets the spin speed — recheck ms/compartment after changing it</div>
+  <div class="row drv drv-pos">180° speed <input type="number" id="ctCalPosSpd" min="10" max="720" value="90"> °/s
+    <span class="muted">(720 = instant)</span></div>
   <div class="row">shutter open <input type="number" id="ctCalShO" min="0" max="180" value="120">
     closed <input type="number" id="ctCalShC" min="0" max="180" value="20"></div>
-  <div class="row">STS speed <input type="number" id="ctCalStsSpd" min="50" max="4095" value="1000">
-    acc <input type="number" id="ctCalStsAcc" min="0" max="254" value="50"></div>
-  <div class="row">spin µs <input type="number" id="ctCalSpinUs" min="1000" max="2000" value="1600">
-    180° speed <input type="number" id="ctCalPosSpd" min="10" max="720" value="90"> °/s</div>
-  <div class="muted ct-note">speeds apply live; changing spin µs shifts how far one ms/compartment goes; 720°/s = instant</div>
   <label>revolver drive
     <select id="ctCalRev">
       <option value="auto">auto (bus servo if found, else spin)</option>
@@ -136,11 +149,11 @@ const HTML = `
       <option value="spin">continuous spin (MG90S-360)</option>
       <option value="pos">positional 180° servo</option>
     </select></label>
-  <div class="row ct-angles">slot°
+  <div class="row ct-angles drv drv-pos">slot°
     ${[0, 30, 60, 90, 120, 150].map((a, i) =>
       `<input type="number" class="ctAng" data-slot="${i + 1}" min="0" max="180" value="${a}" title="compartment ${i + 1} angle">`).join("")}
   </div>
-  <div class="muted ct-note">positional mode only: per-compartment servo angle — leave a slot EMPTY if the 180° servo can't reach it (the app + agents will skip it)</div>
+  <div class="muted ct-note drv drv-pos">per-compartment servo angle — leave a slot EMPTY if the 180° servo can't reach it (the app + agents will skip it)</div>
   <div class="row">
     <button type="button" id="ctCalSave" class="ct-primary">Save to board</button>
     <button type="button" id="ctCalReset" title="restore firmware defaults">Reset</button>
@@ -199,6 +212,16 @@ export function createCalTest({ send, dispense }) {
     $("ctStsSlider").oninput = () => $("ctStsPos").value = $("ctStsSlider").value;
     $("ctStsGo").onclick = () => tx({ cmd: "sts", pos: +$("ctStsPos").value });
     $("ctStsRead").onclick = () => tx({ cmd: "sts" });
+    // STS hand calibration: free/lock torque, store the encoder reading per slot
+    $("ctTorqueOff").onclick = () => tx({ cmd: "sts", torque: 0 });
+    $("ctTorqueOn").onclick = () => tx({ cmd: "sts", torque: 1 });
+    for (let s = 1; s <= 6; s++) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = s;
+      // read the encoder fresh, then onLine() drops the reply into this slot's field
+      b.onclick = () => { pendingTickSlot = s; tx({ cmd: "sts" }); };
+      $("ctTickStore").appendChild(b);
+    }
     // 180° positional revolver: jog by angle (PCA ch8), then store per-slot
     $("ctAngSlider").oninput = () => $("ctAngVal").value = $("ctAngSlider").value;
     $("ctAngGo").onclick = () => tx({ cmd: "pca", ch: 8, deg: +$("ctAngVal").value });
@@ -229,9 +252,22 @@ export function createCalTest({ send, dispense }) {
       posSpeed: $("ctCalPosSpd").value,
       revolver: $("ctCalRev").value,
       slotAngles: [...dlg.querySelectorAll(".ctAng")].map((el) => el.value),
+      slotTicks: [...dlg.querySelectorAll(".ctTick")].map((el) => el.value),
     }));
     $("ctSend").onclick = () => { const v = $("ctRaw").value.trim(); if (v) { log("> " + v, "tx"); send(v).catch((e) => log("send failed: " + (e.message || e), "err")); } };
+    // preview the relevant controls when the user picks a drive (before saving)
+    $("ctCalRev").onchange = () => applyDrive($("ctCalRev").value === "auto" ? lastMode : $("ctCalRev").value);
     dlg.addEventListener("close", stopPoll);
+  }
+
+  // Show only the controls for the drive this board actually runs — a bus-servo
+  // unit doesn't need 180° angles, a 180° unit doesn't need encoder homing.
+  // Everything is shown until the first status/cal reply tells us the drive.
+  let lastMode = "";
+  let pendingTickSlot = 0;   // "store tick as slot N" waits for the next encoder read
+  function applyDrive(drv) {
+    if (!drv) return;
+    dlg.querySelectorAll(".drv").forEach((el) => { el.style.display = el.classList.contains("drv-" + drv) ? "" : "none"; });
   }
 
   function startPoll() {
@@ -254,6 +290,8 @@ export function createCalTest({ send, dispense }) {
     if (!built || !dlg.open) return;
     log(raw, j.ok === false || j.status === "error" ? "err" : "ok");
     if (j.cmd === "status") {
+      const m = j.mode === "pwm" ? "spin" : j.mode;   // pre-1.4 firmware says "pwm"
+      if (m && m !== lastMode) { lastMode = m; applyDrive(m); }
       const f = statusFields(j);
       $("ctMode").textContent = f.mode; $("ctSts").textContent = f.sts;
       $("ctPos").textContent = f.pos; $("ctSlot").textContent = f.slot;
@@ -261,9 +299,14 @@ export function createCalTest({ send, dispense }) {
       $("ctFw").textContent = f.fw;
       if (j.stsPos >= 0) { $("ctStsSlider").value = j.stsPos; $("ctStsActual").textContent = "actual: " + j.stsPos; }
     }
-    if (j.cmd === "sts" && j.ok) {
+    if (j.cmd === "sts" && j.ok && j.pos !== undefined) {
       $("ctStsActual").textContent = "actual: " + j.pos;
       $("ctStsSlider").value = j.pos; $("ctStsPos").value = j.pos;
+      if (pendingTickSlot) {
+        dlg.querySelector(`.ctTick[data-slot="${pendingTickSlot}"]`).value = j.pos;
+        log(`slot ${pendingTickSlot} tick = ${j.pos} (Save to board to persist)`, "tx");
+        pendingTickSlot = 0;
+      }
     }
     if (j.cmd === "cal") {
       if ("slot1_offset" in j) $("ctCalOff").value = j.slot1_offset;
@@ -276,6 +319,7 @@ export function createCalTest({ send, dispense }) {
       if ("pos_speed" in j) $("ctCalPosSpd").value = j.pos_speed;
       if ("revolver" in j) $("ctCalRev").value = j.revolver;
       if (Array.isArray(j.slot_angles)) dlg.querySelectorAll(".ctAng").forEach((el, i) => el.value = j.slot_angles[i] < 0 ? "" : j.slot_angles[i]);
+      if (Array.isArray(j.slot_ticks)) dlg.querySelectorAll(".ctTick").forEach((el, i) => el.value = j.slot_ticks[i] < 0 ? "" : j.slot_ticks[i]);
       $("ctCalSaved").textContent = j.saved ? "saved ✓" : "read";
       setTimeout(() => { const el = $("ctCalSaved"); if (el) el.textContent = ""; }, 1600);
       // grey the test-dispense buttons for slots this unit can't reach
