@@ -103,12 +103,21 @@
     <div class="row">ms / compartment
       <input type="number" id="calMs" min="50" max="5000" value="500" style="width:80px">
       <span style="color:var(--dim)">PWM-360 timing</span></div>
+    <div class="row">STS speed
+      <input type="number" id="calStsSpd" min="50" max="4095" value="1000" style="width:80px">
+      acc <input type="number" id="calStsAcc" min="0" max="254" value="50" style="width:60px">
+      <span style="color:var(--dim)">applied live</span></div>
+    <div class="row">spin µs
+      <input type="number" id="calSpinUs" min="1000" max="2000" value="1600" style="width:80px">
+      <span style="color:var(--dim)">PWM-360 speed — recheck ms/compartment after</span></div>
     <div class="row">shutter open
       <input type="number" id="calShO" min="0" max="180" value="120" style="width:70px">
       closed <input type="number" id="calShC" min="0" max="180" value="20" style="width:70px">
       <span style="color:var(--dim)">deg</span></div>
     <div class="row">revolver
       <select id="calRev">
+        <option value="auto">auto (bus servo if found, else spin)</option>
+        <option value="sts">bus servo (STS3215)</option>
         <option value="spin">continuous spin (MG90S-360)</option>
         <option value="pos">positional 180° servo</option>
       </select></div>
@@ -178,7 +187,8 @@ function onLine(line) {
   if (!j) return;
   if (j.bridge) return;   // bridge housekeeping (opened/lost/waiting)
   if (j.cmd === 'status') {
-    $('s_mode').textContent = j.mode === 'sts' ? 'STS3215 closed-loop' : 'PWM-360 open-loop';
+    const DRV = { sts: 'STS3215 closed-loop', spin: 'PWM-360 open-loop', pos: 'positional 180°', pwm: 'PWM-360 open-loop' };
+    $('s_mode').textContent = (DRV[j.mode] || j.mode) + (j.drive === 'auto' ? ' (auto)' : '');
     $('s_sts').innerHTML = j.stsOk ? '<span class="pill on">answering</span>' : '<span class="pill off">not found</span>';
     $('s_pos').textContent = j.stsPos >= 0 ? `${j.stsPos} ticks (${(j.stsPos * 360 / 4096).toFixed(1)}°)` : '—';
     $('s_slot').textContent = j.slot > 0 ? j.slot : 'unknown (raw move)';
@@ -199,6 +209,9 @@ function onLine(line) {
     if ('ms_per_slot' in j)    $('calMs').value  = j.ms_per_slot;
     if ('shutter_open' in j)   $('calShO').value = j.shutter_open;
     if ('shutter_closed' in j) $('calShC').value = j.shutter_closed;
+    if ('sts_speed' in j)      $('calStsSpd').value = j.sts_speed;
+    if ('sts_acc' in j)        $('calStsAcc').value = j.sts_acc;
+    if ('spin_us' in j)        $('calSpinUs').value = j.spin_us;
     if ('revolver' in j)       $('calRev').value = j.revolver;
     if (Array.isArray(j.slot_angles)) document.querySelectorAll('.calAng').forEach((el, i) => el.value = j.slot_angles[i]);
     $('calSaved').textContent = j.saved ? 'saved ✓' : 'read';
@@ -325,6 +338,7 @@ $('calReset').onclick = () => send({ cmd: 'cal', reset: true });
 $('calSave').onclick  = () => send({ cmd: 'cal',
   slot1_offset: +$('calOff').value, ms_per_slot: +$('calMs').value,
   shutter_open: +$('calShO').value, shutter_closed: +$('calShC').value,
+  sts_speed: +$('calStsSpd').value, sts_acc: +$('calStsAcc').value, spin_us: +$('calSpinUs').value,
   revolver: $('calRev').value,
   slot_angles: [...document.querySelectorAll('.calAng')].map(el => +el.value) });
 

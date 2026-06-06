@@ -6,7 +6,10 @@
 //   Service          a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70
 //   Command  (write) a1c20001-...  JSON: {"slot":2,"dose_units":3}
 //                                  or an array for a recipe: [{...},{...}]
+//                                  or any console {"cmd":...} line (status/probe/
+//                                  sts/pca/led/cal — the app's Calibration menu)
 //   Status (notify)  a1c20002-...  JSON: {"status":"running","slot":2} | {"status":"done"} | {"status":"error"}
+//                                  plus {"ok":...,"cmd":...} replies to cmd writes
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -19,7 +22,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
-#define FW_VERSION    "1.3.0"   // keep in sync with the app release / git tag
+#define FW_VERSION    "1.4.0"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -107,20 +110,33 @@ static inline void ledError()       { ledSet(60, 0, 0); }    // red
 
 // --- runtime calibration ------------------------------------------------------
 // Per-build mechanical values. They default to the #defines above and are set
-// ONCE through the serial console ({"cmd":"cal",...}) — never by voice/BLE — then
-// persisted to NVS so they survive a reboot. The actuation code reads these vars
-// (not the #defines), so a calibrated value takes effect immediately on save.
+// through the serial console or the app's Calibration menu (both speak the same
+// {"cmd":"cal",...} dialect) — never by voice, whose tools can only emit dispense
+// steps — then persisted to NVS so they survive a reboot. The actuation code reads
+// these vars (not the #defines), so a calibrated value takes effect on save.
 static Preferences calPrefs;
 static int calSlot1Offset  = STS_SLOT1_OFFSET;     // STS: encoder ticks, slot 1 under the chute
 static int calMsPerSlot    = REVOLVER_MS_PER_SLOT; // PWM-360: ms to advance one compartment
 static int calShutterOpen  = SHUTTER_OPEN;         // shutter open angle (deg)
 static int calShutterClose = SHUTTER_CLOSED;       // shutter closed angle (deg)
-// Revolver drive VARIANT (PWM path only): 0 = continuous spin (MG90S-360, the
-// default — unchanged behavior), 1 = positional 180° servo where each compartment
-// is a fixed, calibrated servo angle. Per-slot angles persist like the rest.
+// Servo speeds, calibratable per build: STS goal speed + acceleration ramp are
+// pushed to the servo on probe AND on change; spin_us sets the PWM-360 forward
+// pulse (1500 = stop, higher = faster — it changes how far one ms_per_slot goes,
+// so recalibrate ms/compartment after touching it).
+static int calStsSpeed     = STS_SPEED;            // STS: goal speed (servo units)
+static int calStsAcc       = STS_ACC;              // STS: acceleration ramp (0-254)
+static int calSpinUs       = REVOLVER_SPIN_US;     // PWM-360: forward pulse width (µs)
+// Revolver DRIVE selection (persisted): which mechanism rotates the carousel.
+//   auto — STS bus servo if one answers at boot, else PWM continuous spin
+//          (the historical behavior, and the fleet default)
+//   sts  — force the STS3215 bus servo (a failed probe then fails dispenses)
+//   spin — force PWM continuous rotation (MG90S-360 timed stepping)
+//   pos  — force PWM positional 180° servo (per-slot calibrated angles)
+enum { DRV_AUTO = 0, DRV_STS = 1, DRV_SPIN = 2, DRV_POS = 3 };
+static const char *DRV_NAME[] = {"auto", "sts", "spin", "pos"};
 #define REVOLVER_POS_SETTLE_MS 600                 // travel/settle time for a positional move
 static const int CAL_DEFAULT_ANGLE[NUM_SLOTS] = {0, 30, 60, 90, 120, 150};
-static int calRevolverMode = 0;
+static int calRevolverDrive = DRV_AUTO;
 static int calSlotAngle[NUM_SLOTS] = {0, 30, 60, 90, 120, 150};
 static void calLoad() {
   calPrefs.begin("spicecal", true);                // read-only
@@ -128,11 +144,16 @@ static void calLoad() {
   calMsPerSlot    = calPrefs.getInt("msps",   REVOLVER_MS_PER_SLOT);
   calShutterOpen  = calPrefs.getInt("shopen", SHUTTER_OPEN);
   calShutterClose = calPrefs.getInt("shcls",  SHUTTER_CLOSED);
-  calRevolverMode = calPrefs.getInt("revmode", 0);
+  calStsSpeed     = calPrefs.getInt("stsspd", STS_SPEED);
+  calStsAcc       = calPrefs.getInt("stsacc", STS_ACC);
+  calSpinUs       = calPrefs.getInt("spinus", REVOLVER_SPIN_US);
+  // "rdrv" supersedes the v1.3 "revmode" flag (0 = spin variant, 1 = positional,
+  // both under STS auto-detect); migrate so an old positional board keeps working.
+  calRevolverDrive = calPrefs.getInt("rdrv", calPrefs.getInt("revmode", 0) ? DRV_POS : DRV_AUTO);
   for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calSlotAngle[i] = calPrefs.getInt(k, CAL_DEFAULT_ANGLE[i]); }
   calPrefs.end();
-  Serial.printf("cal loaded: s1off=%d msps=%d shopen=%d shcls=%d revmode=%d\n",
-                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose, calRevolverMode);
+  Serial.printf("cal loaded: s1off=%d msps=%d shopen=%d shcls=%d drive=%s\n",
+                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose, DRV_NAME[calRevolverDrive]);
 }
 static void calSave() {
   calPrefs.begin("spicecal", false);               // read-write
@@ -140,7 +161,10 @@ static void calSave() {
   calPrefs.putInt("msps",   calMsPerSlot);
   calPrefs.putInt("shopen", calShutterOpen);
   calPrefs.putInt("shcls",  calShutterClose);
-  calPrefs.putInt("revmode", calRevolverMode);
+  calPrefs.putInt("stsspd", calStsSpeed);
+  calPrefs.putInt("stsacc", calStsAcc);
+  calPrefs.putInt("spinus", calSpinUs);
+  calPrefs.putInt("rdrv", calRevolverDrive);
   for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calPrefs.putInt(k, calSlotAngle[i]); }
   calPrefs.end();
 }
@@ -313,15 +337,22 @@ static int stsPresentPos() {
   return -1;
 }
 
+// Push the calibrated speed + acceleration to the servo's RAM registers. Called
+// on probe and whenever the calibration changes them, so a new speed takes
+// effect on the very next move.
+static void stsApplySpeed() {
+  uint8_t acc = (uint8_t)constrain(calStsAcc, 0, 254);
+  stsWriteReg(41, &acc, 1);
+  uint8_t spd[2] = { (uint8_t)(calStsSpeed & 0xFF), (uint8_t)(calStsSpeed >> 8) };
+  stsWriteReg(46, spd, 2);
+}
 // Ping the bus and, if a servo answers, configure torque/acceleration/speed.
 // Used at boot and by the serial {"cmd":"probe"} command (hot-plugged servo).
 static bool stsProbe() {
   stsOk = stsPing() || stsPing() || stsPing();  // a couple of retries on a fresh bus
   if (stsOk) {
     uint8_t one = 1; stsWriteReg(40, &one, 1);  // torque on
-    uint8_t acc = STS_ACC; stsWriteReg(41, &acc, 1);
-    uint8_t spd[2] = { (uint8_t)(STS_SPEED & 0xFF), (uint8_t)(STS_SPEED >> 8) };
-    stsWriteReg(46, spd, 2);                    // speed limit set once; moves are position-only
+    stsApplySpeed();                            // calibrated speed + acc; moves are position-only
   }
   return stsOk;
 }
@@ -360,7 +391,7 @@ static bool moveRevolverPwm(int slot) {
   int steps = (slot - currentSlot + NUM_SLOTS) % NUM_SLOTS;
   Serial.printf("  revolver -> compartment %d (%d step%s @ %d ms)\n",
                 slot, steps, steps == 1 ? "" : "s", calMsPerSlot);
-  pcaSetUs(REVOLVER_CH, REVOLVER_SPIN_US);
+  pcaSetUs(REVOLVER_CH, calSpinUs);
   delay((uint32_t)steps * calMsPerSlot);
   pcaSetUs(REVOLVER_CH, REVOLVER_STOP_US);      // active brake at neutral
   delay(REVOLVER_BRAKE_MS);
@@ -383,11 +414,19 @@ static bool moveRevolverServo180(int slot) {
   return true;
 }
 
-// runtime dispatch: STS if one answered at boot; else the configured PWM variant
-// (continuous spin by default, or positional 180° when calRevolverMode is set)
+// runtime dispatch: the configured drive, with "auto" resolving to the STS bus
+// servo when one answered at boot and PWM continuous spin otherwise (the
+// historical behavior — fleet boards without a saved drive keep working as-is)
+static int activeDrive() {
+  if (calRevolverDrive != DRV_AUTO) return calRevolverDrive;
+  return stsOk ? DRV_STS : DRV_SPIN;
+}
 static bool moveRevolver(int slot) {
-  if (stsOk) return moveRevolverSts(slot);
-  return calRevolverMode ? moveRevolverServo180(slot) : moveRevolverPwm(slot);
+  switch (activeDrive()) {
+    case DRV_STS: return moveRevolverSts(slot);
+    case DRV_POS: return moveRevolverServo180(slot);
+    default:      return moveRevolverPwm(slot);
+  }
 }
 static void sweeps(int n) {
   for (int i = 0; i < n; i++) {
@@ -439,9 +478,10 @@ static void handle(const String &json) {
   if (ok) { notifyStatus("{\"status\":\"done\"}"); ledConnected(); }
 }
 
-// --- USB-serial control console -----------------------------------------------
-// JSON lines on Serial, same dialect as the BLE command characteristic, so any
-// terminal / script / Web-Serial page can drive the hardware without a phone:
+// --- control console (USB-serial AND BLE) --------------------------------------
+// JSON lines on Serial — and, since v1.4, the same dialect written to the BLE
+// command characteristic — so a terminal, the browser console, or the app's
+// Calibration menu can all drive the hardware:
 //   {"slot":3,"dose_units":1}        dispense (objects and arrays, like BLE)
 //   {"cmd":"status"}                 one-line JSON state report
 //   {"cmd":"probe"}                  re-scan STS bus + PCA (hot-plugged servo)
@@ -451,31 +491,39 @@ static void handle(const String &json) {
 //   {"cmd":"cal"}                               read persisted calibration
 //   {"cmd":"cal","slot1_offset":N,"ms_per_slot":N,"shutter_open":N,"shutter_closed":N}
 //                                               set any subset + persist to NVS
+//   {"cmd":"cal","sts_speed":N,"sts_acc":N,"spin_us":N}   servo speeds (applied live)
+//   {"cmd":"cal","revolver":"auto|sts|spin|pos"} select the revolver drive
 //   {"cmd":"cal","home":true}                   slot1_offset = current encoder
 //   {"cmd":"cal","reset":true}                  restore #define defaults
 // Replies are single-line JSON with an "ok" field; tools/serial-console.html is
-// the browser front-end.
-static void serialReply(bool ok, const char *fmt = nullptr, ...) {
+// the browser front-end. A command that arrived over BLE gets its reply notified
+// on the status characteristic too (the app routes lines with an "ok" field to
+// its Calibration menu; dispense {"status":...} lines are untouched).
+static bool cmdFromBle = false;   // set around handleCmdLine() for a BLE-borne cmd
+static void cmdReply(bool ok, const char *fmt = nullptr, ...) {
   char extra[256] = "";   // status report is ~165 chars; 160 truncated it (broken JSON)
   if (fmt) { va_list ap; va_start(ap, fmt); vsnprintf(extra, sizeof(extra), fmt, ap); va_end(ap); }
-  Serial.printf("{\"ok\":%s%s%s}\n", ok ? "true" : "false", fmt ? "," : "", extra);
+  char line[300];
+  snprintf(line, sizeof(line), "{\"ok\":%s%s%s}", ok ? "true" : "false", fmt ? "," : "", extra);
+  Serial.println(line);
+  if (cmdFromBle && statusChar) { statusChar->setValue((uint8_t *)line, strlen(line)); statusChar->notify(); }
 }
 static void serialStatus() {
   // live reads, not cached: encoder position and a fresh PCA ack probe
   int pos = stsOk ? stsPresentPos() : -1;
   Wire.beginTransmission(PCA9685_ADDR);
   bool pcaAck = Wire.endTransmission() == 0;
-  serialReply(true,
-      "\"cmd\":\"status\",\"id\":\"%s\",\"name\":\"%s\",\"fw\":\"" FW_VERSION "\",\"mode\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
+  cmdReply(true,
+      "\"cmd\":\"status\",\"id\":\"%s\",\"name\":\"%s\",\"fw\":\"" FW_VERSION "\",\"mode\":\"%s\",\"drive\":\"%s\",\"stsOk\":%s,\"stsPos\":%d,\"slot\":%d,"
       "\"pcaAck\":%s,\"i2cErrs\":%lu,\"lastI2cRc\":%u,\"ble\":%s,\"uptimeMs\":%lu,"
       "\"build\":\"" __DATE__ " " __TIME__ "\"",
-      gDevId, gDevName, stsOk ? "sts" : "pwm", stsOk ? "true" : "false", pos, currentSlot,
+      gDevId, gDevName, DRV_NAME[activeDrive()], DRV_NAME[calRevolverDrive], stsOk ? "true" : "false", pos, currentSlot,
       pcaAck ? "true" : "false", (unsigned long)i2cErrs, lastI2cRc,
       bleConnected ? "true" : "false", (unsigned long)millis());
 }
-static void handleSerialLine(const String &line) {
+static void handleCmdLine(const String &line) {
   JsonDocument doc;
-  if (deserializeJson(doc, line)) { serialReply(false, "\"msg\":\"bad json\""); return; }
+  if (deserializeJson(doc, line)) { cmdReply(false, "\"msg\":\"bad json\""); return; }
   if (!doc["cmd"].is<const char *>()) { handle(line); return; }  // dispense — exact BLE path
   String cmd = doc["cmd"].as<const char *>();
   if (cmd == "status") { serialStatus(); return; }
@@ -483,40 +531,40 @@ static void handleSerialLine(const String &line) {
     Wire.beginTransmission(PCA9685_ADDR);
     bool pcaAck = Wire.endTransmission() == 0;
     bool found = stsProbe();
-    serialReply(true, "\"cmd\":\"probe\",\"stsOk\":%s,\"pcaAck\":%s",
+    cmdReply(true, "\"cmd\":\"probe\",\"stsOk\":%s,\"pcaAck\":%s",
                 found ? "true" : "false", pcaAck ? "true" : "false");
     return;
   }
   if (cmd == "sts") {
-    if (!stsOk) { serialReply(false, "\"msg\":\"no STS servo - try probe\""); return; }
+    if (!stsOk) { cmdReply(false, "\"msg\":\"no STS servo - try probe\""); return; }
     if (doc["pos"].is<int>()) {
       int got = stsGoto(doc["pos"].as<int>());
       currentSlot = 0;                          // raw move desyncs the slot tracker
-      if (got < 0) serialReply(false, "\"msg\":\"target not reached (jam? power?)\"");
-      else serialReply(true, "\"cmd\":\"sts\",\"pos\":%d", got);
+      if (got < 0) cmdReply(false, "\"msg\":\"target not reached (jam? power?)\"");
+      else cmdReply(true, "\"cmd\":\"sts\",\"pos\":%d", got);
     } else {
       int pos = stsPresentPos();
-      if (pos < 0) serialReply(false, "\"msg\":\"no reply from STS3215\"");
-      else serialReply(true, "\"cmd\":\"sts\",\"pos\":%d", pos);
+      if (pos < 0) cmdReply(false, "\"msg\":\"no reply from STS3215\"");
+      else cmdReply(true, "\"cmd\":\"sts\",\"pos\":%d", pos);
     }
     return;
   }
   if (cmd == "pca") {
     int ch = doc["ch"] | -1;
-    if (ch < 0 || ch > 15) { serialReply(false, "\"msg\":\"ch must be 0-15\""); return; }
+    if (ch < 0 || ch > 15) { cmdReply(false, "\"msg\":\"ch must be 0-15\""); return; }
     uint32_t errsBefore = i2cErrs;
     if (doc["off"] | false)            pcaChannelOff(ch);
     else if (doc["us"].is<int>())      pcaSetUs(ch, constrain(doc["us"].as<int>(), 500, 2500));
     else if (doc["deg"].is<int>())     pcaSetAngle(ch, doc["deg"].as<int>());
-    else { serialReply(false, "\"msg\":\"need us, deg or off\""); return; }
+    else { cmdReply(false, "\"msg\":\"need us, deg or off\""); return; }
     if (ch == REVOLVER_CH) currentSlot = 0;     // raw spin desyncs the slot tracker
-    if (i2cErrs > errsBefore) serialReply(false, "\"msg\":\"PCA9685 NACK - servo rail powered?\"");
-    else serialReply(true, "\"cmd\":\"pca\",\"ch\":%d", ch);
+    if (i2cErrs > errsBefore) cmdReply(false, "\"msg\":\"PCA9685 NACK - servo rail powered?\"");
+    else cmdReply(true, "\"cmd\":\"pca\",\"ch\":%d", ch);
     return;
   }
   if (cmd == "led") {
     ledSet(doc["r"] | 0, doc["g"] | 0, doc["b"] | 0);
-    serialReply(true, "\"cmd\":\"led\"");
+    cmdReply(true, "\"cmd\":\"led\"");
     return;
   }
   if (cmd == "cal") {
@@ -525,25 +573,42 @@ static void handleSerialLine(const String &line) {
     // {"cmd":"sts","pos":N}), "reset" restores the build defaults.
     bool changed = false;
     if (doc["home"] | false) {
-      if (!stsOk) { serialReply(false, "\"msg\":\"no STS servo - home needs the bus servo\""); return; }
+      if (!stsOk) { cmdReply(false, "\"msg\":\"no STS servo - home needs the bus servo\""); return; }
       int pos = stsPresentPos();
-      if (pos < 0) { serialReply(false, "\"msg\":\"no reply from STS3215\""); return; }
+      if (pos < 0) { cmdReply(false, "\"msg\":\"no reply from STS3215\""); return; }
       calSlot1Offset = pos; changed = true;
     }
     if (doc["reset"] | false) {
       calSlot1Offset = STS_SLOT1_OFFSET; calMsPerSlot = REVOLVER_MS_PER_SLOT;
       calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED;
-      calRevolverMode = 0;
+      calStsSpeed = STS_SPEED; calStsAcc = STS_ACC; calSpinUs = REVOLVER_SPIN_US;
+      calRevolverDrive = DRV_AUTO;
       for (int i = 0; i < NUM_SLOTS; i++) calSlotAngle[i] = CAL_DEFAULT_ANGLE[i];
+      if (stsOk) stsApplySpeed();
       changed = true;
     }
     if (doc["slot1_offset"].is<int>())   { calSlot1Offset  = ((doc["slot1_offset"].as<int>() % STS_TICKS) + STS_TICKS) % STS_TICKS; changed = true; }
     if (doc["ms_per_slot"].is<int>())    { calMsPerSlot    = constrain(doc["ms_per_slot"].as<int>(), 50, 5000); changed = true; }
     if (doc["shutter_open"].is<int>())   { calShutterOpen  = constrain(doc["shutter_open"].as<int>(), 0, 180); changed = true; }
     if (doc["shutter_closed"].is<int>()) { calShutterClose = constrain(doc["shutter_closed"].as<int>(), 0, 180); changed = true; }
-    // revolver VARIANT: "spin" (continuous) | "pos" (positional 180°), or revmode 0/1
-    if (doc["revmode"].is<int>())            { calRevolverMode = doc["revmode"].as<int>() ? 1 : 0; changed = true; }
-    if (doc["revolver"].is<const char *>())  { calRevolverMode = strcmp(doc["revolver"].as<const char *>(), "pos") == 0 ? 1 : 0; changed = true; }
+    // servo speeds: STS goal speed/acc are pushed to the servo right away so the
+    // next move uses them; spin_us shifts how far one ms_per_slot advances, so
+    // recheck ms/compartment after changing it
+    bool spdChanged = false;
+    if (doc["sts_speed"].is<int>())      { calStsSpeed = constrain(doc["sts_speed"].as<int>(), 50, 4095); changed = spdChanged = true; }
+    if (doc["sts_acc"].is<int>())        { calStsAcc   = constrain(doc["sts_acc"].as<int>(), 0, 254); changed = spdChanged = true; }
+    if (spdChanged && stsOk) stsApplySpeed();
+    if (doc["spin_us"].is<int>())        { calSpinUs   = constrain(doc["spin_us"].as<int>(), 1000, 2000); changed = true; }
+    // revolver DRIVE: "auto" (STS if detected, else spin) | "sts" | "spin" | "pos".
+    // Legacy v1.3 "revmode" int still accepted: 1 = positional variant, 0 = auto.
+    if (doc["revmode"].is<int>())            { calRevolverDrive = doc["revmode"].as<int>() ? DRV_POS : DRV_AUTO; changed = true; }
+    if (doc["revolver"].is<const char *>()) {
+      const char *rv = doc["revolver"].as<const char *>();
+      int d = -1;
+      for (int i = 0; i < 4; i++) if (strcmp(rv, DRV_NAME[i]) == 0) d = i;
+      if (d < 0) { cmdReply(false, "\"msg\":\"revolver must be auto|sts|spin|pos\""); return; }
+      calRevolverDrive = d; changed = true;
+    }
     // per-slot angle for positional mode: one slot ({"slot":N,"angle":A}) or all ({"slot_angles":[...]})
     if (doc["slot"].is<int>() && doc["angle"].is<int>()) {
       int sl = doc["slot"].as<int>();
@@ -554,23 +619,25 @@ static void handleSerialLine(const String &line) {
       changed = true;
     }
     if (changed) calSave();
-    serialReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
-                "\"shutter_open\":%d,\"shutter_closed\":%d,\"revolver\":\"%s\","
+    cmdReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
+                "\"shutter_open\":%d,\"shutter_closed\":%d,"
+                "\"sts_speed\":%d,\"sts_acc\":%d,\"spin_us\":%d,\"revolver\":\"%s\","
                 "\"slot_angles\":[%d,%d,%d,%d,%d,%d],\"saved\":%s",
                 calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose,
-                calRevolverMode ? "pos" : "spin",
+                calStsSpeed, calStsAcc, calSpinUs,
+                DRV_NAME[calRevolverDrive],
                 calSlotAngle[0], calSlotAngle[1], calSlotAngle[2], calSlotAngle[3], calSlotAngle[4], calSlotAngle[5],
                 changed ? "true" : "false");
     return;
   }
-  serialReply(false, "\"msg\":\"unknown cmd\"");
+  cmdReply(false, "\"msg\":\"unknown cmd\"");
 }
 static void pollSerial() {
   static String buf;
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
-      if (buf.length()) { handleSerialLine(buf); buf = ""; }
+      if (buf.length()) { handleCmdLine(buf); buf = ""; }
     } else if (buf.length() < 512) buf += c;
   }
 }
@@ -673,7 +740,10 @@ void loop() {
   if (hasCmd) {
     String j;
     portENTER_CRITICAL(&mux); j = cmdBuf; hasCmd = false; portEXIT_CRITICAL(&mux);
-    handle(j);
+    // Full console dialect over BLE: {"cmd":...} lines dispatch exactly like the
+    // serial console (replies notify on the status characteristic); plain dispense
+    // JSON falls through handleCmdLine() to handle() — the unchanged fleet path.
+    cmdFromBle = true; handleCmdLine(j); cmdFromBle = false;
   }
   pollSerial();   // USB-serial control console (same JSON dialect as BLE)
   delay(20);
