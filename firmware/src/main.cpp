@@ -12,6 +12,7 @@
 #include <NimBLEDevice.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include "driver/gpio.h"
 #include "esp_rom_gpio.h"
 #include "soc/uart_periph.h"
@@ -101,6 +102,35 @@ static inline void ledAdvertising() { ledSet(0, 0, 40); }    // blue
 static inline void ledConnected()   { ledSet(0, 40, 0); }    // green
 static inline void ledBusy()        { ledSet(60, 60, 60); }  // white
 static inline void ledError()       { ledSet(60, 0, 0); }    // red
+
+// --- runtime calibration ------------------------------------------------------
+// Per-build mechanical values. They default to the #defines above and are set
+// ONCE through the serial console ({"cmd":"cal",...}) — never by voice/BLE — then
+// persisted to NVS so they survive a reboot. The actuation code reads these vars
+// (not the #defines), so a calibrated value takes effect immediately on save.
+static Preferences calPrefs;
+static int calSlot1Offset  = STS_SLOT1_OFFSET;     // STS: encoder ticks, slot 1 under the chute
+static int calMsPerSlot    = REVOLVER_MS_PER_SLOT; // PWM-360: ms to advance one compartment
+static int calShutterOpen  = SHUTTER_OPEN;         // shutter open angle (deg)
+static int calShutterClose = SHUTTER_CLOSED;       // shutter closed angle (deg)
+static void calLoad() {
+  calPrefs.begin("spicecal", true);                // read-only
+  calSlot1Offset  = calPrefs.getInt("s1off",  STS_SLOT1_OFFSET);
+  calMsPerSlot    = calPrefs.getInt("msps",   REVOLVER_MS_PER_SLOT);
+  calShutterOpen  = calPrefs.getInt("shopen", SHUTTER_OPEN);
+  calShutterClose = calPrefs.getInt("shcls",  SHUTTER_CLOSED);
+  calPrefs.end();
+  Serial.printf("cal loaded: s1off=%d msps=%d shopen=%d shcls=%d\n",
+                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose);
+}
+static void calSave() {
+  calPrefs.begin("spicecal", false);               // read-write
+  calPrefs.putInt("s1off",  calSlot1Offset);
+  calPrefs.putInt("msps",   calMsPerSlot);
+  calPrefs.putInt("shopen", calShutterOpen);
+  calPrefs.putInt("shcls",  calShutterClose);
+  calPrefs.end();
+}
 
 // command handed from the BLE callback (host task) to loop() for actuation
 static volatile bool hasCmd = false;
@@ -290,7 +320,7 @@ static int stsGoto(int target) {
 // never reaches the target (jam / power loss) — caller reports it.
 static bool moveRevolverSts(int slot) {
   if (slot == currentSlot) return true;
-  int target = (STS_SLOT1_OFFSET + (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS;
+  int target = (calSlot1Offset + (slot - 1) * STS_TICKS / NUM_SLOTS) % STS_TICKS;
   Serial.printf("  revolver -> compartment %d (STS pos %d)\n", slot, target);
   if (!stsOk) { Serial.println("  REVOLVER FAIL: STS3215 was not found at boot"); return false; }
   if (stsGoto(target) < 0) { Serial.println("  REVOLVER FAIL: target not reached (jammed? servo power?)"); return false; }
@@ -302,9 +332,9 @@ static bool moveRevolverPwm(int slot) {
   // always step forward, wrapping (open-loop: backlash-free single direction)
   int steps = (slot - currentSlot + NUM_SLOTS) % NUM_SLOTS;
   Serial.printf("  revolver -> compartment %d (%d step%s @ %d ms)\n",
-                slot, steps, steps == 1 ? "" : "s", REVOLVER_MS_PER_SLOT);
+                slot, steps, steps == 1 ? "" : "s", calMsPerSlot);
   pcaSetUs(REVOLVER_CH, REVOLVER_SPIN_US);
-  delay((uint32_t)steps * REVOLVER_MS_PER_SLOT);
+  delay((uint32_t)steps * calMsPerSlot);
   pcaSetUs(REVOLVER_CH, REVOLVER_STOP_US);      // active brake at neutral
   delay(REVOLVER_BRAKE_MS);
   pcaChannelOff(REVOLVER_CH);                   // then release the channel entirely
@@ -319,8 +349,8 @@ static bool moveRevolver(int slot) {
 static void sweeps(int n) {
   for (int i = 0; i < n; i++) {
     Serial.printf("  sweep %d/%d\n", i + 1, n);
-    pcaSetAngle(SHUTTER_CH, SHUTTER_OPEN);   delay(SHUTTER_DWELL_MS);
-    pcaSetAngle(SHUTTER_CH, SHUTTER_CLOSED); delay(SHUTTER_DWELL_MS);
+    pcaSetAngle(SHUTTER_CH, calShutterOpen);  delay(SHUTTER_DWELL_MS);
+    pcaSetAngle(SHUTTER_CH, calShutterClose); delay(SHUTTER_DWELL_MS);
   }
   pcaChannelOff(SHUTTER_CH);                    // release after the final close
 }
@@ -375,6 +405,11 @@ static void handle(const String &json) {
 //   {"cmd":"sts"} / {"cmd":"sts","pos":2048}   read / move the bus servo raw
 //   {"cmd":"pca","ch":8,"us":1600|"deg":90|"off":true}   raw PWM channel
 //   {"cmd":"led","r":0,"g":40,"b":0}            LED override
+//   {"cmd":"cal"}                               read persisted calibration
+//   {"cmd":"cal","slot1_offset":N,"ms_per_slot":N,"shutter_open":N,"shutter_closed":N}
+//                                               set any subset + persist to NVS
+//   {"cmd":"cal","home":true}                   slot1_offset = current encoder
+//   {"cmd":"cal","reset":true}                  restore #define defaults
 // Replies are single-line JSON with an "ok" field; tools/serial-console.html is
 // the browser front-end.
 static void serialReply(bool ok, const char *fmt = nullptr, ...) {
@@ -441,6 +476,32 @@ static void handleSerialLine(const String &line) {
     serialReply(true, "\"cmd\":\"led\"");
     return;
   }
+  if (cmd == "cal") {
+    // Apply any provided fields; missing fields are left untouched. "home" snaps
+    // slot1_offset to wherever the carousel sits NOW (jog there first with
+    // {"cmd":"sts","pos":N}), "reset" restores the build defaults.
+    bool changed = false;
+    if (doc["home"] | false) {
+      if (!stsOk) { serialReply(false, "\"msg\":\"no STS servo - home needs the bus servo\""); return; }
+      int pos = stsPresentPos();
+      if (pos < 0) { serialReply(false, "\"msg\":\"no reply from STS3215\""); return; }
+      calSlot1Offset = pos; changed = true;
+    }
+    if (doc["reset"] | false) {
+      calSlot1Offset = STS_SLOT1_OFFSET; calMsPerSlot = REVOLVER_MS_PER_SLOT;
+      calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED; changed = true;
+    }
+    if (doc["slot1_offset"].is<int>())   { calSlot1Offset  = ((doc["slot1_offset"].as<int>() % STS_TICKS) + STS_TICKS) % STS_TICKS; changed = true; }
+    if (doc["ms_per_slot"].is<int>())    { calMsPerSlot    = constrain(doc["ms_per_slot"].as<int>(), 50, 5000); changed = true; }
+    if (doc["shutter_open"].is<int>())   { calShutterOpen  = constrain(doc["shutter_open"].as<int>(), 0, 180); changed = true; }
+    if (doc["shutter_closed"].is<int>()) { calShutterClose = constrain(doc["shutter_closed"].as<int>(), 0, 180); changed = true; }
+    if (changed) calSave();
+    serialReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
+                "\"shutter_open\":%d,\"shutter_closed\":%d,\"saved\":%s",
+                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose,
+                changed ? "true" : "false");
+    return;
+  }
   serialReply(false, "\"msg\":\"unknown cmd\"");
 }
 static void pollSerial() {
@@ -469,6 +530,7 @@ class SrvCB : public NimBLEServerCallbacks {
 
 void setup() {
   Serial.begin(115200); delay(300);
+  calLoad();   // pull persisted calibration from NVS before homing uses it
   // Bring up the PCA9685 on I2C(0) and home the servos (mirrors Dispenser.init):
   // revolver to compartment 1, shutter closed, then let it settle.
   Wire.begin(I2C_SDA, I2C_SCL, I2C_FREQ);
@@ -480,7 +542,7 @@ void setup() {
                 probe == 0 ? "ACK" : "NO ACK - check servo/DC power", probe);
   pcaWrite8(PCA9685_MODE1, 0x00); delay(5);
   pcaSetFreq(50);
-  pcaSetAngle(SHUTTER_CH, SHUTTER_CLOSED);
+  pcaSetAngle(SHUTTER_CH, calShutterClose);
   delay(SHUTTER_DWELL_MS);
   pcaChannelOff(SHUTTER_CH);                    // don't leave pulses running after homing
 

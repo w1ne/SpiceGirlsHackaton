@@ -36,6 +36,20 @@ export const CONFIG = {
   // acts on overheard conversation. Tool discipline is the product here.
   REALTIME_MODEL: "gpt-realtime",
   REALTIME_VOICE: "marin",
+  // ElevenLabs Conversational AI — a selectable voice provider (see eleven.js).
+  // To keep it simple, BOTH the key and the agent id are entered in Settings and
+  // stored only in the browser (localStorage) — nothing is baked into a build.
+  // VITE_ELEVEN_* seed them for local dev. ELEVEN_BASE is the public REST host
+  // used once per session to mint a short-lived signed conversation URL.
+  ELEVEN_BASE: "https://api.elevenlabs.io",
+  get ELEVEN_AGENT_ID() {
+    try { return localStorage.getItem("el_agent") || import.meta.env.VITE_ELEVEN_AGENT_ID || ""; }
+    catch { return import.meta.env.VITE_ELEVEN_AGENT_ID || ""; }
+  },
+  get ELEVEN_KEY() {
+    try { return localStorage.getItem("el_key") || import.meta.env.VITE_ELEVEN_KEY || ""; }
+    catch { return import.meta.env.VITE_ELEVEN_KEY || ""; }
+  },
   // Local-dev-only direct LLM fallback (VITE_PROXY=0). The key is NEVER baked —
   // a developer types it into Settings, where it stays in their browser only.
   DEEPINFRA_BASE: "https://api.deepinfra.com/v1/openai",
