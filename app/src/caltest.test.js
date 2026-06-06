@@ -48,13 +48,13 @@ describe("statusFields", () => {
 describe("calSavePayload", () => {
   test("builds the full cal command with numeric fields", () => {
     const p = calSavePayload({
-      offset: "2048", msPerSlot: "500", shutterOpen: "120", shutterClosed: "20",
+      offset: "2048", msPerSlot: "500", shutterOpen: "120", shutterClosed: "20", shutterMs: "300",
       stsSpeed: "1000", stsAcc: "50", spinUs: "1600", posSpeed: "90",
       revolver: "sts", slotAngles: ["0", "30", "60", "90", "120", "150"], slotTicks: ["125", "744", "1436", "2205", "2847", ""],
     });
     expect(p).toEqual({
       cmd: "cal",
-      slot1_offset: 2048, ms_per_slot: 500, shutter_open: 120, shutter_closed: 20,
+      slot1_offset: 2048, ms_per_slot: 500, shutter_open: 120, shutter_closed: 20, shutter_ms: 300,
       sts_speed: 1000, sts_acc: 50, spin_us: 1600, pos_speed: 90,
       revolver: "sts", slot_angles: [0, 30, 60, 90, 120, 150], slot_ticks: [125, 744, 1436, 2205, 2847, -1],
     });
@@ -62,7 +62,7 @@ describe("calSavePayload", () => {
 
   test("empty angle fields mark a slot not-available (-1)", () => {
     const p = calSavePayload({
-      offset: "0", msPerSlot: "500", shutterOpen: "120", shutterClosed: "20",
+      offset: "0", msPerSlot: "500", shutterOpen: "120", shutterClosed: "20", shutterMs: "300",
       stsSpeed: "1000", stsAcc: "50", spinUs: "1600", posSpeed: "90",
       revolver: "pos", slotAngles: ["10", "70", "130", "", " ", ""], slotTicks: ["", "", "", "", "", ""],
     });

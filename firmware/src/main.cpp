@@ -22,7 +22,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
-#define FW_VERSION    "1.5.3"   // keep in sync with the app release / git tag
+#define FW_VERSION    "1.5.4"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -42,7 +42,8 @@
 #define SHUTTER_CH       12
 #define SHUTTER_CLOSED   20
 #define SHUTTER_OPEN     120
-#define SHUTTER_DWELL_MS 300
+#define SHUTTER_DWELL_MS 300   // settle after closing, per sweep
+#define SHUTTER_OPEN_MS  600   // default POUR time (calibratable as shutter_ms)
 
 // --- revolver drive (runtime auto-select) -------------------------------------
 // BOTH revolver drivers are compiled in. At boot the firmware probes the STS
@@ -119,6 +120,7 @@ static int calSlot1Offset  = STS_SLOT1_OFFSET;     // STS: encoder ticks, slot 1
 static int calMsPerSlot    = REVOLVER_MS_PER_SLOT; // PWM-360: ms to advance one compartment
 static int calShutterOpen  = SHUTTER_OPEN;         // shutter open angle (deg)
 static int calShutterClose = SHUTTER_CLOSED;       // shutter closed angle (deg)
+static int calShutterMs    = SHUTTER_OPEN_MS;      // how long the shutter HOLDS OPEN per sweep (ms)
 // Servo speeds, calibratable per build: STS goal speed + acceleration ramp are
 // pushed to the servo on probe AND on change; spin_us sets the PWM-360 forward
 // pulse (1500 = stop, higher = faster — it changes how far one ms_per_slot goes,
@@ -154,6 +156,7 @@ static void calLoad() {
   calMsPerSlot    = calPrefs.getInt("msps",   REVOLVER_MS_PER_SLOT);
   calShutterOpen  = calPrefs.getInt("shopen", SHUTTER_OPEN);
   calShutterClose = calPrefs.getInt("shcls",  SHUTTER_CLOSED);
+  calShutterMs    = calPrefs.getInt("shms",   SHUTTER_OPEN_MS);
   calStsSpeed     = calPrefs.getInt("stsspd", STS_SPEED);
   calStsAcc       = calPrefs.getInt("stsacc", STS_ACC);
   calSpinUs       = calPrefs.getInt("spinus", REVOLVER_SPIN_US);
@@ -174,6 +177,7 @@ static void calSave() {
   calPrefs.putInt("msps",   calMsPerSlot);
   calPrefs.putInt("shopen", calShutterOpen);
   calPrefs.putInt("shcls",  calShutterClose);
+  calPrefs.putInt("shms",   calShutterMs);
   calPrefs.putInt("stsspd", calStsSpeed);
   calPrefs.putInt("stsacc", calStsAcc);
   calPrefs.putInt("spinus", calSpinUs);
@@ -481,9 +485,9 @@ static bool moveRevolver(int slot) {
 }
 static void sweeps(int n) {
   for (int i = 0; i < n; i++) {
-    Serial.printf("  sweep %d/%d\n", i + 1, n);
-    pcaSetAngle(SHUTTER_CH, calShutterOpen);  delay(SHUTTER_DWELL_MS);
-    pcaSetAngle(SHUTTER_CH, calShutterClose); delay(SHUTTER_DWELL_MS);
+    Serial.printf("  sweep %d/%d (open %d ms)\n", i + 1, n, calShutterMs);
+    pcaSetAngle(SHUTTER_CH, calShutterOpen);  delay(calShutterMs);       // calibrated pour time
+    pcaSetAngle(SHUTTER_CH, calShutterClose); delay(SHUTTER_DWELL_MS);   // fixed settle before the next sweep
   }
   pcaChannelOff(SHUTTER_CH);                    // release after the final close
 }
@@ -649,7 +653,7 @@ static void handleCmdLine(const String &line) {
     }
     if (doc["reset"] | false) {
       calSlot1Offset = STS_SLOT1_OFFSET; calMsPerSlot = REVOLVER_MS_PER_SLOT;
-      calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED;
+      calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED; calShutterMs = SHUTTER_OPEN_MS;
       calStsSpeed = STS_SPEED; calStsAcc = STS_ACC; calSpinUs = REVOLVER_SPIN_US;
       calPosSpeed = REVOLVER_POS_DEGS; calStsDir = 1;
       calRevolverDrive = DRV_AUTO;
@@ -662,6 +666,7 @@ static void handleCmdLine(const String &line) {
     if (doc["ms_per_slot"].is<int>())    { calMsPerSlot    = constrain(doc["ms_per_slot"].as<int>(), 50, 5000); changed = true; }
     if (doc["shutter_open"].is<int>())   { calShutterOpen  = constrain(doc["shutter_open"].as<int>(), 0, 180); changed = true; }
     if (doc["shutter_closed"].is<int>()) { calShutterClose = constrain(doc["shutter_closed"].as<int>(), 0, 180); changed = true; }
+    if (doc["shutter_ms"].is<int>())     { calShutterMs    = constrain(doc["shutter_ms"].as<int>(), 50, 5000); changed = true; }
     // servo speeds: STS goal speed/acc are pushed to the servo right away so the
     // next move uses them; spin_us shifts how far one ms_per_slot advances, so
     // recheck ms/compartment after changing it
@@ -720,11 +725,11 @@ static void handleCmdLine(const String &line) {
     if (doc["sts_dir"].is<int>())        { calStsDir = doc["sts_dir"].as<int>() < 0 ? -1 : 1; changed = true; }
     if (changed) calSave();
     cmdReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
-                "\"shutter_open\":%d,\"shutter_closed\":%d,"
+                "\"shutter_open\":%d,\"shutter_closed\":%d,\"shutter_ms\":%d,"
                 "\"sts_speed\":%d,\"sts_acc\":%d,\"sts_dir\":%d,\"spin_us\":%d,\"pos_speed\":%d,\"revolver\":\"%s\","
                 "\"slot_angles\":[%d,%d,%d,%d,%d,%d],"
                 "\"slot_ticks\":[%d,%d,%d,%d,%d,%d],\"saved\":%s",
-                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose,
+                calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose, calShutterMs,
                 calStsSpeed, calStsAcc, calStsDir, calSpinUs, calPosSpeed,
                 DRV_NAME[calRevolverDrive],
                 calSlotAngle[0], calSlotAngle[1], calSlotAngle[2], calSlotAngle[3], calSlotAngle[4], calSlotAngle[5],

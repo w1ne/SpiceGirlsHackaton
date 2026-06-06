@@ -42,7 +42,7 @@ export function calSavePayload(v) {
   return {
     cmd: "cal",
     slot1_offset: +v.offset, ms_per_slot: +v.msPerSlot,
-    shutter_open: +v.shutterOpen, shutter_closed: +v.shutterClosed,
+    shutter_open: +v.shutterOpen, shutter_closed: +v.shutterClosed, shutter_ms: +v.shutterMs,
     sts_speed: +v.stsSpeed, sts_acc: +v.stsAcc, spin_us: +v.spinUs, pos_speed: +v.posSpeed,
     revolver: v.revolver,
     slot_angles: v.slotAngles.map((a) => String(a).trim() === "" ? -1 : +a),
@@ -142,6 +142,8 @@ const HTML = `
     <span class="muted">(720 = instant)</span></div>
   <div class="row">shutter open <input type="number" id="ctCalShO" min="0" max="180" value="120">
     closed <input type="number" id="ctCalShC" min="0" max="180" value="20"></div>
+  <div class="row">open for <input type="number" id="ctCalShMs" min="50" max="5000" value="600"> ms
+    <span class="muted">pour time per sweep — more ms = more spice per dose</span></div>
   <label>revolver drive
     <select id="ctCalRev">
       <option value="auto">auto (bus servo if found, else spin)</option>
@@ -247,7 +249,7 @@ export function createCalTest({ send, dispense }) {
     $("ctCalReset").onclick = () => tx({ cmd: "cal", reset: true });
     $("ctCalSave").onclick = () => tx(calSavePayload({
       offset: $("ctCalOff").value, msPerSlot: $("ctCalMs").value,
-      shutterOpen: $("ctCalShO").value, shutterClosed: $("ctCalShC").value,
+      shutterOpen: $("ctCalShO").value, shutterClosed: $("ctCalShC").value, shutterMs: $("ctCalShMs").value,
       stsSpeed: $("ctCalStsSpd").value, stsAcc: $("ctCalStsAcc").value, spinUs: $("ctCalSpinUs").value,
       posSpeed: $("ctCalPosSpd").value,
       revolver: $("ctCalRev").value,
@@ -313,6 +315,7 @@ export function createCalTest({ send, dispense }) {
       if ("ms_per_slot" in j) $("ctCalMs").value = j.ms_per_slot;
       if ("shutter_open" in j) $("ctCalShO").value = j.shutter_open;
       if ("shutter_closed" in j) $("ctCalShC").value = j.shutter_closed;
+      if ("shutter_ms" in j) $("ctCalShMs").value = j.shutter_ms;
       if ("sts_speed" in j) $("ctCalStsSpd").value = j.sts_speed;
       if ("sts_acc" in j) $("ctCalStsAcc").value = j.sts_acc;
       if ("spin_us" in j) $("ctCalSpinUs").value = j.spin_us;

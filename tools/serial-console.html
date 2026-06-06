@@ -130,6 +130,9 @@
       <input type="number" id="calShO" min="0" max="180" value="120" style="width:70px">
       closed <input type="number" id="calShC" min="0" max="180" value="20" style="width:70px">
       <span style="color:var(--dim)">deg</span></div>
+    <div class="row">open for
+      <input type="number" id="calShMs" min="50" max="5000" value="600" style="width:80px">
+      <span style="color:var(--dim)">ms pour time per sweep</span></div>
     <div class="row">revolver
       <select id="calRev">
         <option value="auto">auto (bus servo if found, else spin)</option>
@@ -238,6 +241,7 @@ function onLine(line) {
     if ('ms_per_slot' in j)    $('calMs').value  = j.ms_per_slot;
     if ('shutter_open' in j)   $('calShO').value = j.shutter_open;
     if ('shutter_closed' in j) $('calShC').value = j.shutter_closed;
+    if ('shutter_ms' in j)     $('calShMs').value = j.shutter_ms;
     if ('sts_speed' in j)      $('calStsSpd').value = j.sts_speed;
     if ('sts_acc' in j)        $('calStsAcc').value = j.sts_acc;
     if ('spin_us' in j)        $('calSpinUs').value = j.spin_us;
@@ -390,7 +394,7 @@ $('calHome').onclick  = () => send({ cmd: 'cal', home: true });
 $('calReset').onclick = () => send({ cmd: 'cal', reset: true });
 $('calSave').onclick  = () => send({ cmd: 'cal',
   slot1_offset: +$('calOff').value, ms_per_slot: +$('calMs').value,
-  shutter_open: +$('calShO').value, shutter_closed: +$('calShC').value,
+  shutter_open: +$('calShO').value, shutter_closed: +$('calShC').value, shutter_ms: +$('calShMs').value,
   sts_speed: +$('calStsSpd').value, sts_acc: +$('calStsAcc').value, spin_us: +$('calSpinUs').value,
   pos_speed: +$('calPosSpd').value,
   revolver: $('calRev').value,

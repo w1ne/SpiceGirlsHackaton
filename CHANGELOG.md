@@ -5,6 +5,12 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.5.4
+
+- **Shutter pour time is calibratable.** "Open for N ms" in the calibration
+  card sets how long the shutter holds open per sweep — more ms, more spice
+  per dose. Default is now 600 ms (was a fixed 300 ms compile-time constant).
+
 ## v1.5.3
 
 - **Hand calibration for the bus-servo carousel.** New **Free (hand-turn) /

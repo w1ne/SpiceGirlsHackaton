@@ -9,7 +9,7 @@ const SUPABASE_URL = "https://tlgtyskedenqffikfuzx.supabase.co";
 export const CONFIG = {
   // App version — shown in Settings and bumped on every release. Keep in sync
   // with package.json + the GitHub release tag (vX.Y.Z).
-  APP_VERSION: "1.5.3",
+  APP_VERSION: "1.5.4",
   SUPABASE_URL,
   // Route the brain + realtime token through edge functions unless explicitly off.
   PROXY: (import.meta.env.VITE_PROXY ?? "1") !== "0",
