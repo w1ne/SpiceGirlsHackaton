@@ -5,6 +5,7 @@ import { TextToSpeech } from "@capacitor-community/text-to-speech";
 import { CONFIG } from "../config.js";
 import { TOOL_DEFS, runTool, realtimeTools } from "./tools.js";
 import { startRealtime } from "./realtime.js";
+import { startEleven } from "./eleven.js";
 import { createVoiceGate } from "./voiceGate.js";
 import { createRoaster } from "./roast.js";
 import { RAMSAY_CLIPS } from "./ramsayClips.js";
@@ -20,9 +21,16 @@ const LS = {
   set diKey(v) { localStorage.setItem("di_key", v); },
   get tts() { return localStorage.getItem("tts") !== "0"; },
   set tts(v) { localStorage.setItem("tts", v ? "1" : "0"); },
-  // "realtime" (OpenAI speech-to-speech) or "classic" (turn-based STT→LLM→TTS)
+  // "realtime" (OpenAI speech-to-speech), "eleven" (ElevenLabs Conversational AI)
+  // or "classic" (turn-based STT→LLM→TTS)
   get voiceMode() { return localStorage.getItem("voice_mode") || "realtime"; },
   set voiceMode(v) { localStorage.setItem("voice_mode", v); },
+  // ElevenLabs credentials — stored only in the browser, read back via CONFIG
+  // (config.js ELEVEN_KEY / ELEVEN_AGENT_ID getters use these same keys).
+  get elKey() { return localStorage.getItem("el_key") || ""; },
+  set elKey(v) { v ? localStorage.setItem("el_key", v) : localStorage.removeItem("el_key"); },
+  get elAgent() { return localStorage.getItem("el_agent") || ""; },
+  set elAgent(v) { v ? localStorage.setItem("el_agent", v) : localStorage.removeItem("el_agent"); },
   // Last dispenser we connected to (Android deviceId == MAC). Lets us reconnect
   // WITHOUT scanning — Android throttles an app to zero results after a few
   // scans, so skipping the scan is what makes reconnect reliable.
@@ -516,10 +524,54 @@ function stopRealtimeVoice() {
   micBtn.textContent = "🎙️ Start talking"; micBtn.classList.remove("listening"); status("");
 }
 
+// ---------- ElevenLabs voice (Conversational AI speech-to-speech) ----------
+// Same gate, same tool surface, same parallel-BLE kick as the OpenAI path —
+// only the provider differs. The ElevenLabs SDK owns the mic/playback/turn-
+// taking; we supply the persona prompt + the dispenser tool implementations.
+async function startElevenVoice() {
+  if (voiceGate.active) return;
+  if (!CONFIG.ELEVEN_KEY || !CONFIG.ELEVEN_AGENT_ID) {
+    openSettings(); status("add your ElevenLabs key + agent id", "err"); return;
+  }
+  micBtn.textContent = "⏹ Stop"; micBtn.classList.add("listening");
+  const myGen = voiceGate.gen;
+  const stale = () => voiceGate.gen !== myGen;
+  try {
+    const session = await voiceGate.start(async () => {
+      // Kick the dispenser link off in PARALLEL — never await it (the BLE ladder
+      // can take 40+s); dispense() re-verifies the link before any motor runs.
+      if (!deviceId) {
+        bubble("Connecting to the dispenser in the background…");
+        connectBLE().catch(() => {}).then(() => {
+          if (!deviceId && !stale()) bubble("⚠️ Dispenser not connected — I'll talk you through it but can't run the motors yet.");
+        });
+      }
+      return startEleven({
+        instructions: systemPrompt(),
+        firstMessage: "Hi! What are you cooking? Tell me a spice and how much.",
+        toolNames: realtimeTools().map((t) => t.name),
+        onToolCall: (name, args) => runTool(name, args, ctx),
+        onUserText: (t) => { if (!stale()) bubble(t, "user"); },
+        onBotText: (t) => { if (!stale()) bubble(t, "bot"); },
+        onIdle: () => { if (stale()) return; bubble("Paused after a quiet minute — tap to talk again 💤"); stopRealtimeVoice(); },
+        log: (kind, text) => {
+          if (stale()) return;
+          if (kind === "err") { status(text, "err"); bubble("⚠️ " + text); }
+          else if (kind === "tool") bubble("🔧 " + text);
+          else status(text, "ok");
+        },
+      });
+    });
+    if (!session) return; // duplicate tap, or Stop landed mid-startup
+  } catch (e) { status("eleven: " + (e.message || e), "err"); bubble("⚠️ " + (e.message || e)); stopRealtimeVoice(); }
+}
+
 micBtn.onclick = () => {
   if (voiceGate.active) return stopRealtimeVoice();
   if (listening) return stopConversation();
-  return LS.voiceMode === "realtime" ? startRealtimeVoice() : startConversation();
+  if (LS.voiceMode === "realtime") return startRealtimeVoice();
+  if (LS.voiceMode === "eleven") return startElevenVoice();
+  return startConversation();
 };
 
 // ---------- Hell's Kitchen mode (real Ramsay roasts) ----------
@@ -606,11 +658,15 @@ $("#saveInit").onclick = saveInit;
 // ---------- settings ----------
 function openSettings() {
   $("#diKey").value = LS.diKey; $("#ttsOn").checked = LS.tts; $("#voiceMode").value = LS.voiceMode;
+  $("#elKey").value = LS.elKey; $("#elAgent").value = LS.elAgent;
   $("#appVer").textContent = "v" + CONFIG.APP_VERSION;
   $("#settings").showModal();
 }
 $("#settingsBtn").onclick = openSettings;
-$("#saveSettings").onclick = () => { LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value; };
+$("#saveSettings").onclick = () => {
+  LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value;
+  LS.elKey = $("#elKey").value.trim(); LS.elAgent = $("#elAgent").value.trim();
+};
 
 // ---------- persona picker ----------
 function syncPersonaChip() {

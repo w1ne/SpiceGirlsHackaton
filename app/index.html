@@ -83,8 +83,15 @@
       <label>Voice mode
         <select id="voiceMode">
           <option value="realtime">Natural — talk in real time 🎙️</option>
+          <option value="eleven">Natural — ElevenLabs voice 🎙️</option>
           <option value="classic">Simple — one line at a time</option>
         </select>
+      </label>
+      <label>ElevenLabs API key
+        <input id="elKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="xi-api-key (for ElevenLabs voice)" />
+      </label>
+      <label>ElevenLabs agent id
+        <input id="elAgent" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="agent_… (for ElevenLabs voice)" />
       </label>
       <label class="row"><input id="ttsOn" type="checkbox" checked /> Read replies aloud (Simple mode)</label>
       <div class="actions">

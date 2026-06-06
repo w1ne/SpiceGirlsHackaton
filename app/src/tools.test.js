@@ -78,6 +78,31 @@ describe("runTool dispense", () => {
   });
 });
 
+// ---------- fill by voice: "put cumin in 1, paprika in 2" ----------
+describe("runTool set_compartments", () => {
+  test("records the spice→compartment map the cook dictates", async () => {
+    const saved = {};
+    const ctx = {
+      saveCompartments: vi.fn(async (map) => Object.assign(saved, map)),
+      getState: () => ({ compartments: saved }),
+    };
+    const res = await runTool("set_compartments", {
+      assignments: [{ compartment: 1, spice: "cumin" }, { compartment: 2, spice: "paprika" }],
+    }, ctx);
+    expect(res.ok).toBe(true);
+    expect(ctx.saveCompartments).toHaveBeenCalledWith({ 1: "cumin", 2: "paprika" });
+    expect(res.compartments).toEqual({ 1: "cumin", 2: "paprika" });
+  });
+
+  test("ignores incomplete assignments (missing compartment or spice)", async () => {
+    const ctx = { saveCompartments: vi.fn().mockResolvedValue(undefined), getState: () => ({ compartments: {} }) };
+    await runTool("set_compartments", {
+      assignments: [{ compartment: 3, spice: "salt" }, { compartment: 4 }, { spice: "pepper" }, null],
+    }, ctx);
+    expect(ctx.saveCompartments).toHaveBeenCalledWith({ 3: "salt" });
+  });
+});
+
 // ---------- #4: personalization (preferences + allergens) ----------
 describe("runTool preferences", () => {
   test("set_preference persists a key/value via ctx", async () => {
