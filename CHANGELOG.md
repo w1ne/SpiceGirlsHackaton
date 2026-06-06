@@ -5,6 +5,16 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.5.0
+
+- **Units can have missing slots — everything copes.** A 180° positional
+  carousel can't reach all six compartments, so a slot can now be marked
+  **not available**: leave its angle field empty in the calibration card
+  (app or console). The firmware refuses to dispense an unavailable slot
+  with a precise error instead of driving to a junk angle; the app greys
+  those slots out in the motor and setup screens, and the voice agent never
+  offers them (it only ever works with the compartments you've named).
+
 ## v1.4.2
 
 - **Angle jog for the 180° revolver.** Calibration & test (app **and** bench

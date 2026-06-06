@@ -10,12 +10,13 @@ import { createVoiceGate } from "./voiceGate.js";
 import { createRoaster } from "./roast.js";
 import { RAMSAY_CLIPS } from "./ramsayClips.js";
 import { PERSONAS, DEFAULT_PERSONA_ID, getPersona, personaSystemPrompt } from "./personas.js";
-import { createCalTest } from "./caltest.js";
+import { createCalTest, slotAvailability } from "./caltest.js";
 
 const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
 let prefs = {}, allergens = [];
 let deviceId = null, listening = false, busy = false, connecting = false, notifyOk = false;
+let slotAvail = [true, true, true, true, true, true]; // updated from cal replies (fw ≥1.4)
 let suppressReconnect = false; // set during an explicit Unpair so the self-heal doesn't re-grab the board
 
 const LS = {
@@ -263,6 +264,9 @@ function onStatus(value) {
   const raw = dataViewToText(value);
   let s; try { s = JSON.parse(raw); } catch { return; }
   calTest.onLine(s, raw);       // mirror every line in the Calibration & test console
+  // Track which slots exist on this unit (a 180° positional carousel may not
+  // reach all six) — the motor + setup dialogs grey out the missing ones.
+  if (s.cmd === "cal") slotAvail = slotAvailability(s);
   if (s.ok !== undefined) return; // a {"cmd":...} reply for that screen, not a dispense status
   const spice = slots[s.slot] ?? (s.slot != null ? `compartment ${s.slot}` : "");
   if (s.status === "running") status(`dispensing ${spice}…`);
@@ -673,7 +677,8 @@ function openMotors() {
   const grid = $("#motorBtns");
   grid.innerHTML = Array.from({ length: 6 }, (_, i) => {
     const n = i + 1, name = slots[n] ? `<b>${slots[n]}</b>` : `<b>#${n}</b>`;
-    return `<button type="button" data-comp="${n}">${name}<small>compartment ${n}</small></button>`;
+    const off = slotAvail[i] ? "" : " disabled";
+    return `<button type="button" data-comp="${n}"${off}>${name}<small>${slotAvail[i] ? `compartment ${n}` : "not on this unit"}</small></button>`;
   }).join("");
   grid.querySelectorAll("button[data-comp]").forEach((b) => {
     b.onclick = (e) => { e.preventDefault();
@@ -688,6 +693,9 @@ $("#motorsBtn").onclick = openMotors;
 function openInit() {
   $("#initRows").innerHTML = Array.from({ length: 6 }, (_, i) => {
     const n = i + 1;
+    if (!slotAvail[i])
+      return `<label>Compartment ${n} <small class="muted">— not on this unit</small>
+        <input type="text" data-comp="${n}" disabled placeholder="unreachable on this carousel" /></label>`;
     return `<label>Compartment ${n}<input type="text" data-comp="${n}" autocomplete="off" autocapitalize="off"
       value="${(slots[n] || "").replace(/"/g, "&quot;")}" placeholder="e.g. paprika" /></label>`;
   }).join("");

@@ -22,7 +22,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
-#define FW_VERSION    "1.4.0"   // keep in sync with the app release / git tag
+#define FW_VERSION    "1.5.0"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -407,6 +407,10 @@ static bool moveRevolverPwm(int slot) {
 static bool moveRevolverServo180(int slot) {
   if (slot == currentSlot) return true;
   int ang = calSlotAngle[constrain(slot, 1, NUM_SLOTS) - 1];
+  if (ang < 0) {  // slot marked not-available — never drive to a junk angle
+    Serial.printf("  REVOLVER FAIL: slot %d not available on this unit\n", slot);
+    return false;
+  }
   Serial.printf("  revolver(180) -> compartment %d (angle %d deg)\n", slot, ang);
   pcaSetAngle(REVOLVER_CH, ang);
   delay(REVOLVER_POS_SETTLE_MS);
@@ -443,6 +447,13 @@ static bool stepCmd(int slot, int units) {
   char buf[48]; snprintf(buf, sizeof(buf), "{\"status\":\"running\",\"slot\":%d}", slot);
   notifyStatus(buf); ledBusy();
   if (slot < 1 || slot > 6) { notifyStatus("{\"status\":\"error\",\"msg\":\"unknown slot\"}"); ledError(); return false; }
+  // A 180° positional carousel may not reach every hole; uncalibrated (-1) slots
+  // are refused with a precise error instead of dispensing somewhere random.
+  if (activeDrive() == DRV_POS && calSlotAngle[slot - 1] < 0) {
+    char ebuf[80];
+    snprintf(ebuf, sizeof(ebuf), "{\"status\":\"error\",\"msg\":\"slot %d not available on this unit\"}", slot);
+    notifyStatus(ebuf); ledError(); return false;
+  }
   uint32_t errsBefore = i2cErrs;
   if (!moveRevolver(slot)) {
     notifyStatus("{\"status\":\"error\",\"msg\":\"revolver not responding - check servo power\"}");
@@ -609,13 +620,23 @@ static void handleCmdLine(const String &line) {
       if (d < 0) { cmdReply(false, "\"msg\":\"revolver must be auto|sts|spin|pos\""); return; }
       calRevolverDrive = d; changed = true;
     }
-    // per-slot angle for positional mode: one slot ({"slot":N,"angle":A}) or all ({"slot_angles":[...]})
+    // per-slot angle for positional mode: one slot ({"slot":N,"angle":A}) or all
+    // ({"slot_angles":[...]}). A 180° servo reaches only ~half the carousel, so
+    // -1 marks a slot NOT AVAILABLE on this unit — positional dispense refuses it
+    // instead of driving to a meaningless default angle.
     if (doc["slot"].is<int>() && doc["angle"].is<int>()) {
       int sl = doc["slot"].as<int>();
-      if (sl >= 1 && sl <= NUM_SLOTS) { calSlotAngle[sl - 1] = constrain(doc["angle"].as<int>(), 0, 180); changed = true; }
+      if (sl >= 1 && sl <= NUM_SLOTS) {
+        int a = doc["angle"].as<int>();
+        calSlotAngle[sl - 1] = a < 0 ? -1 : constrain(a, 0, 180); changed = true;
+      }
     }
     if (doc["slot_angles"].is<JsonArray>()) {
-      int i = 0; for (JsonVariant v : doc["slot_angles"].as<JsonArray>()) { if (i < NUM_SLOTS) calSlotAngle[i] = constrain(v.as<int>(), 0, 180); i++; }
+      int i = 0;
+      for (JsonVariant v : doc["slot_angles"].as<JsonArray>()) {
+        if (i < NUM_SLOTS) { int a = v.as<int>(); calSlotAngle[i] = a < 0 ? -1 : constrain(a, 0, 180); }
+        i++;
+      }
       changed = true;
     }
     if (changed) calSave();

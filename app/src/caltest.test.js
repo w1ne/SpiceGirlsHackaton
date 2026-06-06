@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { driveLabel, statusFields, calSavePayload } from "./caltest.js";
+import { driveLabel, statusFields, calSavePayload, slotAvailability } from "./caltest.js";
 
 // ---------- revolver drive label (status card) ----------
 describe("driveLabel", () => {
@@ -58,5 +58,28 @@ describe("calSavePayload", () => {
       sts_speed: 1000, sts_acc: 50, spin_us: 1600,
       revolver: "sts", slot_angles: [0, 30, 60, 90, 120, 150],
     });
+  });
+
+  test("empty angle fields mark a slot not-available (-1)", () => {
+    const p = calSavePayload({
+      offset: "0", msPerSlot: "500", shutterOpen: "120", shutterClosed: "20",
+      stsSpeed: "1000", stsAcc: "50", spinUs: "1600",
+      revolver: "pos", slotAngles: ["10", "70", "130", "", " ", ""],
+    });
+    expect(p.slot_angles).toEqual([10, 70, 130, -1, -1, -1]);
+  });
+});
+
+// ---------- cal reply → which slots exist on this unit ----------
+describe("slotAvailability", () => {
+  test("positional drive: negative angles mean the slot is missing", () => {
+    const a = slotAvailability({ revolver: "pos", slot_angles: [10, 70, 130, -1, -1, -1] });
+    expect(a).toEqual([true, true, true, false, false, false]);
+  });
+
+  test("non-positional drives reach all six slots regardless of angles", () => {
+    expect(slotAvailability({ revolver: "auto", slot_angles: [-1, -1, -1, -1, -1, -1] }))
+      .toEqual([true, true, true, true, true, true]);
+    expect(slotAvailability({ revolver: "sts" })).toEqual([true, true, true, true, true, true]);
   });
 });

@@ -34,7 +34,10 @@ export function statusFields(j) {
   };
 }
 
-// calibration inputs → the {"cmd":"cal",...} save payload
+// calibration inputs → the {"cmd":"cal",...} save payload.
+// An EMPTY angle field means "slot not available on this unit" (a 180° servo
+// reaches only ~half the carousel) and is sent as -1 — the firmware refuses to
+// dispense those slots in positional mode.
 export function calSavePayload(v) {
   return {
     cmd: "cal",
@@ -42,8 +45,16 @@ export function calSavePayload(v) {
     shutter_open: +v.shutterOpen, shutter_closed: +v.shutterClosed,
     sts_speed: +v.stsSpeed, sts_acc: +v.stsAcc, spin_us: +v.spinUs,
     revolver: v.revolver,
-    slot_angles: v.slotAngles.map(Number),
+    slot_angles: v.slotAngles.map((a) => String(a).trim() === "" ? -1 : +a),
   };
+}
+
+// cal reply → which slots exist on this unit. Only the positional drive can
+// have missing slots; every other drive reaches all six.
+export function slotAvailability(j) {
+  const all = [true, true, true, true, true, true];
+  if (j.revolver !== "pos" || !Array.isArray(j.slot_angles)) return all;
+  return all.map((_, i) => j.slot_angles[i] >= 0);
 }
 
 // Dialog ------------------------------------------------------------------------
@@ -128,7 +139,7 @@ const HTML = `
     ${[0, 30, 60, 90, 120, 150].map((a, i) =>
       `<input type="number" class="ctAng" data-slot="${i + 1}" min="0" max="180" value="${a}" title="compartment ${i + 1} angle">`).join("")}
   </div>
-  <div class="muted ct-note">positional mode only: per-compartment servo angle</div>
+  <div class="muted ct-note">positional mode only: per-compartment servo angle — leave a slot EMPTY if the 180° servo can't reach it (the app + agents will skip it)</div>
   <div class="row">
     <button type="button" id="ctCalSave" class="ct-primary">Save to board</button>
     <button type="button" id="ctCalReset" title="restore firmware defaults">Reset</button>
@@ -261,9 +272,12 @@ export function createCalTest({ send, dispense }) {
       if ("sts_acc" in j) $("ctCalStsAcc").value = j.sts_acc;
       if ("spin_us" in j) $("ctCalSpinUs").value = j.spin_us;
       if ("revolver" in j) $("ctCalRev").value = j.revolver;
-      if (Array.isArray(j.slot_angles)) dlg.querySelectorAll(".ctAng").forEach((el, i) => el.value = j.slot_angles[i]);
+      if (Array.isArray(j.slot_angles)) dlg.querySelectorAll(".ctAng").forEach((el, i) => el.value = j.slot_angles[i] < 0 ? "" : j.slot_angles[i]);
       $("ctCalSaved").textContent = j.saved ? "saved ✓" : "read";
       setTimeout(() => { const el = $("ctCalSaved"); if (el) el.textContent = ""; }, 1600);
+      // grey the test-dispense buttons for slots this unit can't reach
+      const avail = slotAvailability(j);
+      $("ctSlots").querySelectorAll("button").forEach((b, i) => b.disabled = !avail[i]);
     }
   }
 

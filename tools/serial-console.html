@@ -136,7 +136,7 @@
       <input type="number" class="calAng" data-slot="4" min="0" max="180" value="90"  style="width:48px" title="compartment 4 angle">
       <input type="number" class="calAng" data-slot="5" min="0" max="180" value="120" style="width:48px" title="compartment 5 angle">
       <input type="number" class="calAng" data-slot="6" min="0" max="180" value="150" style="width:48px" title="compartment 6 angle"></div>
-    <div class="row" style="color:var(--dim);font-size:12px;margin-top:-2px">positional mode only: per-compartment servo angle (a 180° servo reaches ~half the holes — leave the rest)</div>
+    <div class="row" style="color:var(--dim);font-size:12px;margin-top:-2px">positional mode only: per-compartment servo angle — leave a slot EMPTY if the 180° servo can't reach it (dispense will refuse it)</div>
     <div class="row">
       <button id="calSave" class="primary">Save to board</button>
       <button id="calReset" title="restore firmware defaults">Reset</button>
@@ -221,7 +221,7 @@ function onLine(line) {
     if ('sts_acc' in j)        $('calStsAcc').value = j.sts_acc;
     if ('spin_us' in j)        $('calSpinUs').value = j.spin_us;
     if ('revolver' in j)       $('calRev').value = j.revolver;
-    if (Array.isArray(j.slot_angles)) document.querySelectorAll('.calAng').forEach((el, i) => el.value = j.slot_angles[i]);
+    if (Array.isArray(j.slot_angles)) document.querySelectorAll('.calAng').forEach((el, i) => el.value = j.slot_angles[i] < 0 ? '' : j.slot_angles[i]);
     $('calSaved').textContent = j.saved ? 'saved ✓' : 'read';
     setTimeout(() => $('calSaved').textContent = '', 1600);
   }
@@ -360,7 +360,7 @@ $('calSave').onclick  = () => send({ cmd: 'cal',
   shutter_open: +$('calShO').value, shutter_closed: +$('calShC').value,
   sts_speed: +$('calStsSpd').value, sts_acc: +$('calStsAcc').value, spin_us: +$('calSpinUs').value,
   revolver: $('calRev').value,
-  slot_angles: [...document.querySelectorAll('.calAng')].map(el => +el.value) });
+  slot_angles: [...document.querySelectorAll('.calAng')].map(el => el.value.trim() === '' ? -1 : +el.value) });
 
 // raw input
 $('send').onclick = () => { if ($('raw').value.trim()) send($('raw').value.trim()); };
