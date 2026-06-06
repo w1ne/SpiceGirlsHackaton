@@ -30,9 +30,16 @@ jobs:
           path: |
             ~/.platformio
             firmware/.pio
-          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          key: pio-v2-pioarduino-55.03.37-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
       - name: Install PlatformIO
         run: pipx install platformio
+      - name: Pin espressif32 platform (pioarduino, as on the bench machine)
+        # `platform = espressif32` resolves by NAME to whatever is installed.
+        # The bench builds use the pioarduino fork (Arduino core 3.x) — the
+        # official registry platform is a different framework entirely and
+        # boots differently. Install the fork globally so the name resolves
+        # to it, matching the local setup without touching platformio.ini.
+        run: pio pkg install -g -p "https://github.com/pioarduino/platform-espressif32/releases/download/55.03.37/platform-espressif32.zip"
       - name: Build firmware (esp32-s3)
         run: pio run -e esp32-s3 -d firmware
       - name: Merge factory image
