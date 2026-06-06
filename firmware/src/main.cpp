@@ -22,7 +22,7 @@
 #include "soc/uart_periph.h"
 
 #define DEVICE_NAME   "SpiceGirls"
-#define FW_VERSION    "1.5.0"   // keep in sync with the app release / git tag
+#define FW_VERSION    "1.5.1"   // keep in sync with the app release / git tag
 #define SERVICE_UUID  "a1c20000-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define CMD_UUID      "a1c20001-d8e4-4f9b-9b1a-2f3c4d5e6f70"
 #define STATUS_UUID   "a1c20002-d8e4-4f9b-9b1a-2f3c4d5e6f70"
@@ -126,6 +126,11 @@ static int calShutterClose = SHUTTER_CLOSED;       // shutter closed angle (deg)
 static int calStsSpeed     = STS_SPEED;            // STS: goal speed (servo units)
 static int calStsAcc       = STS_ACC;              // STS: acceleration ramp (0-254)
 static int calSpinUs       = REVOLVER_SPIN_US;     // PWM-360: forward pulse width (µs)
+// A plain PWM servo always slews at full speed; the positional revolver instead
+// RAMPS the commanded angle at pos_speed deg/s so the carousel doesn't slam
+// (720 = effectively instant, the old behavior).
+#define REVOLVER_POS_DEGS 90
+static int calPosSpeed     = REVOLVER_POS_DEGS;    // 180° positional: sweep speed (deg/s)
 // Revolver DRIVE selection (persisted): which mechanism rotates the carousel.
 //   auto — STS bus servo if one answers at boot, else PWM continuous spin
 //          (the historical behavior, and the fleet default)
@@ -147,6 +152,7 @@ static void calLoad() {
   calStsSpeed     = calPrefs.getInt("stsspd", STS_SPEED);
   calStsAcc       = calPrefs.getInt("stsacc", STS_ACC);
   calSpinUs       = calPrefs.getInt("spinus", REVOLVER_SPIN_US);
+  calPosSpeed     = calPrefs.getInt("posspd", REVOLVER_POS_DEGS);
   // "rdrv" supersedes the v1.3 "revmode" flag (0 = spin variant, 1 = positional,
   // both under STS auto-detect); migrate so an old positional board keeps working.
   calRevolverDrive = calPrefs.getInt("rdrv", calPrefs.getInt("revmode", 0) ? DRV_POS : DRV_AUTO);
@@ -164,6 +170,7 @@ static void calSave() {
   calPrefs.putInt("stsspd", calStsSpeed);
   calPrefs.putInt("stsacc", calStsAcc);
   calPrefs.putInt("spinus", calSpinUs);
+  calPrefs.putInt("posspd", calPosSpeed);
   calPrefs.putInt("rdrv", calRevolverDrive);
   for (int i = 0; i < NUM_SLOTS; i++) { char k[8]; snprintf(k, sizeof(k), "ang%d", i); calPrefs.putInt(k, calSlotAngle[i]); }
   calPrefs.end();
@@ -385,12 +392,14 @@ static bool moveRevolverSts(int slot) {
   currentSlot = slot;
   return true;
 }
+static int posCurAngle = -1;   // last commanded 180°-revolver angle, -1 = unknown
 static bool moveRevolverPwm(int slot) {
   if (slot == currentSlot) return true;         // already there
   // always step forward, wrapping (open-loop: backlash-free single direction)
   int steps = (slot - currentSlot + NUM_SLOTS) % NUM_SLOTS;
   Serial.printf("  revolver -> compartment %d (%d step%s @ %d ms)\n",
                 slot, steps, steps == 1 ? "" : "s", calMsPerSlot);
+  posCurAngle = -1;                             // continuous spin invalidates the angle tracker
   pcaSetUs(REVOLVER_CH, calSpinUs);
   delay((uint32_t)steps * calMsPerSlot);
   pcaSetUs(REVOLVER_CH, REVOLVER_STOP_US);      // active brake at neutral
@@ -404,6 +413,31 @@ static bool moveRevolverPwm(int slot) {
 // calibrated angle and HOLD it (no channel release — a 180° servo needs the pulse
 // to hold position against the carousel). Reaches only the slots whose angles fall
 // within the servo's 0-180° sweep; unreachable slots are simply left uncalibrated.
+//
+// The servo itself slews flat-out, so the commanded angle is RAMPED at
+// calPosSpeed deg/s — without this the carousel slams between compartments and
+// flings the spice around. Tracks the last commanded angle; after a boot or a
+// raw µs/off command the position is unknown and the first move goes direct.
+static void revolverRampTo(int target) {
+  target = constrain(target, 0, 180);
+  if (posCurAngle < 0 || calPosSpeed >= 720) {        // unknown start / "instant"
+    pcaSetAngle(REVOLVER_CH, target);
+    posCurAngle = target;
+    delay(REVOLVER_POS_SETTLE_MS);
+    return;
+  }
+  const int stepMs = 20;
+  float pos = posCurAngle;
+  float step = calPosSpeed * stepMs / 1000.0f;
+  while (fabsf(target - pos) > step) {
+    pos += (target > pos) ? step : -step;
+    pcaSetAngle(REVOLVER_CH, (int)lroundf(pos));
+    delay(stepMs);
+  }
+  pcaSetAngle(REVOLVER_CH, target);
+  posCurAngle = target;
+  delay(200);                                          // settle at the target
+}
 static bool moveRevolverServo180(int slot) {
   if (slot == currentSlot) return true;
   int ang = calSlotAngle[constrain(slot, 1, NUM_SLOTS) - 1];
@@ -411,9 +445,8 @@ static bool moveRevolverServo180(int slot) {
     Serial.printf("  REVOLVER FAIL: slot %d not available on this unit\n", slot);
     return false;
   }
-  Serial.printf("  revolver(180) -> compartment %d (angle %d deg)\n", slot, ang);
-  pcaSetAngle(REVOLVER_CH, ang);
-  delay(REVOLVER_POS_SETTLE_MS);
+  Serial.printf("  revolver(180) -> compartment %d (angle %d deg @ %d deg/s)\n", slot, ang, calPosSpeed);
+  revolverRampTo(ang);
   currentSlot = slot;
   return true;
 }
@@ -564,9 +597,12 @@ static void handleCmdLine(const String &line) {
     int ch = doc["ch"] | -1;
     if (ch < 0 || ch > 15) { cmdReply(false, "\"msg\":\"ch must be 0-15\""); return; }
     uint32_t errsBefore = i2cErrs;
-    if (doc["off"] | false)            pcaChannelOff(ch);
-    else if (doc["us"].is<int>())      pcaSetUs(ch, constrain(doc["us"].as<int>(), 500, 2500));
-    else if (doc["deg"].is<int>())     pcaSetAngle(ch, doc["deg"].as<int>());
+    if (doc["off"] | false)            { pcaChannelOff(ch); if (ch == REVOLVER_CH) posCurAngle = -1; }
+    else if (doc["us"].is<int>())      { pcaSetUs(ch, constrain(doc["us"].as<int>(), 500, 2500)); if (ch == REVOLVER_CH) posCurAngle = -1; }
+    // deg on the revolver channel rides the same speed ramp as a dispense move,
+    // so the app's angle jog doesn't slam the carousel; other channels are direct
+    else if (doc["deg"].is<int>())     { if (ch == REVOLVER_CH) revolverRampTo(doc["deg"].as<int>());
+                                         else pcaSetAngle(ch, doc["deg"].as<int>()); }
     else { cmdReply(false, "\"msg\":\"need us, deg or off\""); return; }
     if (ch == REVOLVER_CH) currentSlot = 0;     // raw spin desyncs the slot tracker
     if (i2cErrs > errsBefore) cmdReply(false, "\"msg\":\"PCA9685 NACK - servo rail powered?\"");
@@ -593,6 +629,7 @@ static void handleCmdLine(const String &line) {
       calSlot1Offset = STS_SLOT1_OFFSET; calMsPerSlot = REVOLVER_MS_PER_SLOT;
       calShutterOpen = SHUTTER_OPEN; calShutterClose = SHUTTER_CLOSED;
       calStsSpeed = STS_SPEED; calStsAcc = STS_ACC; calSpinUs = REVOLVER_SPIN_US;
+      calPosSpeed = REVOLVER_POS_DEGS;
       calRevolverDrive = DRV_AUTO;
       for (int i = 0; i < NUM_SLOTS; i++) calSlotAngle[i] = CAL_DEFAULT_ANGLE[i];
       if (stsOk) stsApplySpeed();
@@ -610,6 +647,7 @@ static void handleCmdLine(const String &line) {
     if (doc["sts_acc"].is<int>())        { calStsAcc   = constrain(doc["sts_acc"].as<int>(), 0, 254); changed = spdChanged = true; }
     if (spdChanged && stsOk) stsApplySpeed();
     if (doc["spin_us"].is<int>())        { calSpinUs   = constrain(doc["spin_us"].as<int>(), 1000, 2000); changed = true; }
+    if (doc["pos_speed"].is<int>())      { calPosSpeed = constrain(doc["pos_speed"].as<int>(), 10, 720); changed = true; }
     // revolver DRIVE: "auto" (STS if detected, else spin) | "sts" | "spin" | "pos".
     // Legacy v1.3 "revmode" int still accepted: 1 = positional variant, 0 = auto.
     if (doc["revmode"].is<int>())            { calRevolverDrive = doc["revmode"].as<int>() ? DRV_POS : DRV_AUTO; changed = true; }
@@ -642,10 +680,10 @@ static void handleCmdLine(const String &line) {
     if (changed) calSave();
     cmdReply(true, "\"cmd\":\"cal\",\"slot1_offset\":%d,\"ms_per_slot\":%d,"
                 "\"shutter_open\":%d,\"shutter_closed\":%d,"
-                "\"sts_speed\":%d,\"sts_acc\":%d,\"spin_us\":%d,\"revolver\":\"%s\","
+                "\"sts_speed\":%d,\"sts_acc\":%d,\"spin_us\":%d,\"pos_speed\":%d,\"revolver\":\"%s\","
                 "\"slot_angles\":[%d,%d,%d,%d,%d,%d],\"saved\":%s",
                 calSlot1Offset, calMsPerSlot, calShutterOpen, calShutterClose,
-                calStsSpeed, calStsAcc, calSpinUs,
+                calStsSpeed, calStsAcc, calSpinUs, calPosSpeed,
                 DRV_NAME[calRevolverDrive],
                 calSlotAngle[0], calSlotAngle[1], calSlotAngle[2], calSlotAngle[3], calSlotAngle[4], calSlotAngle[5],
                 changed ? "true" : "false");

@@ -118,6 +118,9 @@
     <div class="row">spin µs
       <input type="number" id="calSpinUs" min="1000" max="2000" value="1600" style="width:80px">
       <span style="color:var(--dim)">PWM-360 speed — recheck ms/compartment after</span></div>
+    <div class="row">180° speed
+      <input type="number" id="calPosSpd" min="10" max="720" value="90" style="width:80px">
+      <span style="color:var(--dim)">deg/s sweep ramp (720 = instant)</span></div>
     <div class="row">shutter open
       <input type="number" id="calShO" min="0" max="180" value="120" style="width:70px">
       closed <input type="number" id="calShC" min="0" max="180" value="20" style="width:70px">
@@ -220,6 +223,7 @@ function onLine(line) {
     if ('sts_speed' in j)      $('calStsSpd').value = j.sts_speed;
     if ('sts_acc' in j)        $('calStsAcc').value = j.sts_acc;
     if ('spin_us' in j)        $('calSpinUs').value = j.spin_us;
+    if ('pos_speed' in j)      $('calPosSpd').value = j.pos_speed;
     if ('revolver' in j)       $('calRev').value = j.revolver;
     if (Array.isArray(j.slot_angles)) document.querySelectorAll('.calAng').forEach((el, i) => el.value = j.slot_angles[i] < 0 ? '' : j.slot_angles[i]);
     $('calSaved').textContent = j.saved ? 'saved ✓' : 'read';
@@ -359,6 +363,7 @@ $('calSave').onclick  = () => send({ cmd: 'cal',
   slot1_offset: +$('calOff').value, ms_per_slot: +$('calMs').value,
   shutter_open: +$('calShO').value, shutter_closed: +$('calShC').value,
   sts_speed: +$('calStsSpd').value, sts_acc: +$('calStsAcc').value, spin_us: +$('calSpinUs').value,
+  pos_speed: +$('calPosSpd').value,
   revolver: $('calRev').value,
   slot_angles: [...document.querySelectorAll('.calAng')].map(el => el.value.trim() === '' ? -1 : +el.value) });
 

@@ -5,6 +5,14 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.5.1
+
+- **The 180° carousel glides instead of slamming.** A plain PWM servo slews at
+  full speed, so the firmware now ramps the commanded angle at a calibratable
+  **180° speed** (deg/s, default 90, 720 = instant) — dispense moves and the
+  angle jog both ride the ramp. Set it in the calibration card next to the
+  other servo speeds.
+
 ## v1.5.0
 
 - **Units can have missing slots — everything copes.** A 180° positional

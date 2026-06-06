@@ -43,7 +43,7 @@ export function calSavePayload(v) {
     cmd: "cal",
     slot1_offset: +v.offset, ms_per_slot: +v.msPerSlot,
     shutter_open: +v.shutterOpen, shutter_closed: +v.shutterClosed,
-    sts_speed: +v.stsSpeed, sts_acc: +v.stsAcc, spin_us: +v.spinUs,
+    sts_speed: +v.stsSpeed, sts_acc: +v.stsAcc, spin_us: +v.spinUs, pos_speed: +v.posSpeed,
     revolver: v.revolver,
     slot_angles: v.slotAngles.map((a) => String(a).trim() === "" ? -1 : +a),
   };
@@ -126,8 +126,9 @@ const HTML = `
     closed <input type="number" id="ctCalShC" min="0" max="180" value="20"></div>
   <div class="row">STS speed <input type="number" id="ctCalStsSpd" min="50" max="4095" value="1000">
     acc <input type="number" id="ctCalStsAcc" min="0" max="254" value="50"></div>
-  <div class="row">spin µs <input type="number" id="ctCalSpinUs" min="1000" max="2000" value="1600"></div>
-  <div class="muted ct-note">speeds apply live; changing spin µs shifts how far one ms/compartment goes</div>
+  <div class="row">spin µs <input type="number" id="ctCalSpinUs" min="1000" max="2000" value="1600">
+    180° speed <input type="number" id="ctCalPosSpd" min="10" max="720" value="90"> °/s</div>
+  <div class="muted ct-note">speeds apply live; changing spin µs shifts how far one ms/compartment goes; 720°/s = instant</div>
   <label>revolver drive
     <select id="ctCalRev">
       <option value="auto">auto (bus servo if found, else spin)</option>
@@ -225,6 +226,7 @@ export function createCalTest({ send, dispense }) {
       offset: $("ctCalOff").value, msPerSlot: $("ctCalMs").value,
       shutterOpen: $("ctCalShO").value, shutterClosed: $("ctCalShC").value,
       stsSpeed: $("ctCalStsSpd").value, stsAcc: $("ctCalStsAcc").value, spinUs: $("ctCalSpinUs").value,
+      posSpeed: $("ctCalPosSpd").value,
       revolver: $("ctCalRev").value,
       slotAngles: [...dlg.querySelectorAll(".ctAng")].map((el) => el.value),
     }));
@@ -271,6 +273,7 @@ export function createCalTest({ send, dispense }) {
       if ("sts_speed" in j) $("ctCalStsSpd").value = j.sts_speed;
       if ("sts_acc" in j) $("ctCalStsAcc").value = j.sts_acc;
       if ("spin_us" in j) $("ctCalSpinUs").value = j.spin_us;
+      if ("pos_speed" in j) $("ctCalPosSpd").value = j.pos_speed;
       if ("revolver" in j) $("ctCalRev").value = j.revolver;
       if (Array.isArray(j.slot_angles)) dlg.querySelectorAll(".ctAng").forEach((el, i) => el.value = j.slot_angles[i] < 0 ? "" : j.slot_angles[i]);
       $("ctCalSaved").textContent = j.saved ? "saved ✓" : "read";
