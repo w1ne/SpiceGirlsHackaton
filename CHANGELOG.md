@@ -5,6 +5,25 @@ Versions track the Android app (`SpiceGirls.apk`). Each release is tagged
 [releases page](https://github.com/w1ne/SpiceGirlsHackaton/releases/latest).
 The running version is shown in the app under **Settings**.
 
+## v1.4.0
+
+- **Calibrate from the app.** **Settings → 🛠 Calibration & test** brings the
+  whole bench console to the phone, over Bluetooth: live hardware status,
+  per-compartment test dispense, raw carousel jog, shutter/PCA/LED controls,
+  and the full calibration card (home the carousel, timing, shutter angles)
+  with save-to-board — no laptop or USB cable needed.
+- **Choose the revolver drive.** The calibration menu now selects what rotates
+  the carousel: **auto** (bus servo if found, else PWM spin — the previous
+  behavior and still the default), **bus servo (STS3215)**, **continuous spin
+  (MG90S-360)**, or **positional 180° servo**. Persisted per board.
+- **Servo speeds are calibratable.** Bus-servo goal speed + acceleration and
+  the PWM-360 spin pulse width are now part of the calibration (applied live,
+  persisted), instead of compile-time constants.
+- **Firmware: full console dialect over BLE.** The command characteristic now
+  accepts the same `{"cmd":...}` JSON as the USB serial console, with replies
+  notified back — this is what powers the in-app screen. Dispense commands and
+  voice are unchanged (voice still can't touch calibration).
+
 ## v1.3.1
 
 - **Unpair a dispenser.** A new "Unpair dispenser" button in **Settings** forgets
