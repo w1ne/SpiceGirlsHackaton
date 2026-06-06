@@ -15,6 +15,7 @@ const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 let slots = {}, recipes = [], messages = [];
 let prefs = {}, allergens = [];
 let deviceId = null, listening = false, busy = false, connecting = false, notifyOk = false;
+let suppressReconnect = false; // set during an explicit Unpair so the self-heal doesn't re-grab the board
 
 const LS = {
   get diKey() { return localStorage.getItem("di_key") || ""; },
@@ -246,6 +247,7 @@ async function connectBLE() {
 }
 function onDisconnect() {
   deviceId = null; notifyOk = false; bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected");
+  if (suppressReconnect) { status("dispenser unpaired", "ok"); return; } // explicit Unpair — don't re-grab it
   status("dispenser disconnected — reconnecting…", "err");
   // Self-heal: the ESP drops the link if it resets (e.g. re-powered, or USB
   // re-enumerated). Auto-reconnect so dispenses keep reaching the motors instead
@@ -291,6 +293,28 @@ async function ensureLive() {
   return !!deviceId;
 }
 bleBtn.onclick = () => (deviceId ? null : connectBLE());
+
+// Forget the currently-paired dispenser: disconnect, drop the pinned BLE address
+// and the per-unit cloud key, and suppress the auto-reconnect so the NEXT Connect
+// can pair a different board (e.g. switching between prototypes).
+function pairedLabel() {
+  const k = LS.deviceKey;
+  if (k) return "Paired: " + k.replace(/^dispenser-/, "SpiceGirls-");
+  return LS.deviceId ? "Paired (waiting for id)" : "Not paired";
+}
+async function unpairDispenser() {
+  const mac = deviceId || LS.deviceId;
+  suppressReconnect = true;
+  deviceId = null; notifyOk = false;
+  LS.deviceId = ""; LS.deviceKey = "";              // forget the board + its cloud binding
+  try { if (mac) await BleClient.disconnect(mac); } catch {}
+  bleBtn.textContent = "🔗 Connect"; bleBtn.classList.remove("connected");
+  await loadDevice().catch(() => {});               // back to the default/empty compartments
+  const info = $("#pairedInfo"); if (info) info.textContent = pairedLabel();
+  status("dispenser unpaired — tap Connect to pair another", "ok");
+  bubble("Dispenser unpaired. Tap 🔗 Connect to pair a different one.");
+  setTimeout(() => { suppressReconnect = false; }, 2500); // re-enable self-heal for the next link
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -665,9 +689,11 @@ $("#saveInit").onclick = saveInit;
 // ---------- settings ----------
 function openSettings() {
   $("#diKey").value = LS.diKey; $("#ttsOn").checked = LS.tts; $("#voiceMode").value = LS.voiceMode;
+  $("#pairedInfo").textContent = pairedLabel();
   $("#appVer").textContent = "v" + CONFIG.APP_VERSION;
   $("#settings").showModal();
 }
+$("#unpairBtn").onclick = () => { $("#settings").close(); unpairDispenser(); };
 $("#settingsBtn").onclick = openSettings;
 $("#saveSettings").onclick = () => {
   LS.diKey = $("#diKey").value.trim(); LS.tts = $("#ttsOn").checked; LS.voiceMode = $("#voiceMode").value;
