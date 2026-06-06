@@ -75,4 +75,24 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Quick BLE test without the phone (Linux): `python tools/ble_test.py '{"slot":1,"dose_units":1}'`.
 
-Alternative C++ build (direct-GPIO, no PCA9685): `cd firmware && pio run -e esp32-s3 -t upload`.
+## Flashing the C++ firmware (Linux / macOS)
+
+The current firmware is `firmware/` (C++; same BLE protocol, plus the control
+console, persisted calibration, and the STS3215 bus-servo drive).
+
+```bash
+# build + flash (Linux: pipx install platformio · macOS: brew install platformio)
+cd firmware && pio run -e esp32-s3 -t upload
+```
+
+No toolchain? Flash the prebuilt combined image with esptool instead:
+
+```bash
+esptool.py --chip esp32s3 --port $PORT write_flash 0x0 firmware.factory.bin
+# image: firmware/.pio/build/esp32-s3/firmware.factory.bin
+# PORT — Linux: /dev/ttyACM0 · macOS: /dev/cu.usbmodem* (USB) or /dev/cu.wchusbserial* (UART)
+```
+
+If the upload won't start, hold **BOOT** while plugging in, then rerun. Logs +
+the JSON console are on the **native USB** port; `./tools/serve-console.sh`
+serves the calibration console at http://localhost:8000/.
